@@ -10,10 +10,12 @@ from src.core.model_provider import ModelProvider
 
 class VectorStore:
     """
-    Hybrid RAG 混合检索记忆库：
-    结合 Dense Embedding 深度语义向量 (0.65) 与 Sparse BM25/N-Gram 词汇精准度 (0.35)，
-    并支持按段落类型 (hook/argument/quote/conclusion) 与主题进行 Metadata 过滤。
+    工业级 RRF (Reciprocal Rank Fusion) 混合检索记忆库：
+    采用 SIGIR 标准倒数排名融合算法，消除密集向量与稀疏词频的数值量纲偏差：
+    RRF(d) = 1 / (60 + rank_dense(d)) + 1 / (60 + rank_sparse(d))
     """
+
+    RRF_K: int = 60  # RRF 经典平滑常数
 
     def __init__(
         self,
@@ -51,47 +53,68 @@ class VectorStore:
         type_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid 混合检索：Dense 语义相似度 + Sparse 稀疏词汇相似度
+        标准 RRF (Reciprocal Rank Fusion) 倒数排名融合检索
         """
         if not self.chunks:
             return []
 
-        # 候选过滤
+        # 候选集类型过滤
         candidates = self.chunks
         if type_filter:
-            candidates = [c for c in candidates if c.get("metadata", {}).get("type") == type_filter]
-            if not candidates:
-                candidates = self.chunks  # 降级回退
+            filtered = [c for c in candidates if c.get("metadata", {}).get("type") == type_filter]
+            if filtered:
+                candidates = filtered
 
+        # 1. 密集向量检索通道 (Dense Retrieval)
         query_embs = self.model_provider.get_embeddings([query])
         query_dense = query_embs[0] if query_embs else None
+
+        dense_ranks: Dict[str, int] = {}
+        if query_dense and any(c.get("embedding") is not None for c in candidates):
+            dense_scores = []
+            for c in candidates:
+                emb = c.get("embedding")
+                score = self._cosine_similarity(query_dense, emb) if emb else 0.0
+                dense_scores.append((score, c["id"]))
+            # 按相似度降序排序，赋予绝对排名 (1-indexed)
+            dense_scores.sort(key=lambda x: x[0], reverse=True)
+            for rank_idx, (_, cid) in enumerate(dense_scores, start=1):
+                dense_ranks[cid] = rank_idx
+
+        # 2. 稀疏词汇检索通道 (Sparse Retrieval - Token Overlap / BM25 变体)
         query_tokens = self._tokenize(query)
-
-        scored_candidates: List[Tuple[float, Dict[str, Any]]] = []
-
+        sparse_scores = []
         for c in candidates:
-            # 1. 密集向量得分 (Dense Score)
-            dense_score = 0.0
-            if query_dense and c.get("embedding"):
-                dense_score = max(0.0, self._cosine_similarity(query_dense, c["embedding"]))
+            c_tokens = self._tokenize(c["content"])
+            score = self._sparse_similarity(query_tokens, c_tokens)
+            sparse_scores.append((score, c["id"]))
+        # 按稀疏分数降序排序，赋予绝对排名
+        sparse_scores.sort(key=lambda x: x[0], reverse=True)
+        sparse_ranks: Dict[str, int] = {}
+        for rank_idx, (_, cid) in enumerate(sparse_scores, start=1):
+            sparse_ranks[cid] = rank_idx
 
-            # 2. 稀疏词汇得分 (Sparse Score)
-            sparse_score = self._sparse_similarity(query_tokens, self._tokenize(c["content"]))
+        # 3. 执行 RRF 排名倒数融合计算
+        rrf_scores: List[Tuple[float, Dict[str, Any]]] = []
+        for c in candidates:
+            cid = c["id"]
+            dense_rank = dense_ranks.get(cid)
+            sparse_rank = sparse_ranks.get(cid, len(candidates) + 1)
 
-            # 3. 加权混合计算
-            if query_dense:
-                hybrid_score = 0.65 * dense_score + 0.35 * sparse_score
-            else:
-                hybrid_score = sparse_score  # 无向量 API 时纯走本地 BM25/TF-IDF
+            # 标准公式: 1 / (60 + rank_dense) + 1 / (60 + rank_sparse)
+            rrf_val = 0.0
+            if dense_rank is not None:
+                rrf_val += 1.0 / (self.RRF_K + dense_rank)
+            rrf_val += 1.0 / (self.RRF_K + sparse_rank)
 
-            scored_candidates.append((hybrid_score, c))
+            c["rrf_score"] = round(rrf_val, 6)
+            rrf_scores.append((rrf_val, c))
 
-        # 降序排列
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        return [c for score, c in scored_candidates[:top_k]]
+        # 按 RRF 得分从高到低排列
+        rrf_scores.sort(key=lambda x: x[0], reverse=True)
+        return [c for score, c in rrf_scores[:top_k]]
 
     def search(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        """保持接口兼容的标准搜索"""
         return self.hybrid_search(query, top_k=top_k)
 
     def get_all(self) -> List[Dict[str, Any]]:
