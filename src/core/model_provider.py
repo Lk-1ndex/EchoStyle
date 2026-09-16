@@ -39,6 +39,27 @@ class ModelProvider:
         except Exception:
             self.tokenizer = None
 
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        json_mode: bool = False,
+        timeout: float = 120.0,
+        max_retries: int = 3,
+    ) -> str:
+        """便捷快捷调用别名"""
+        return self.chat_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+
     def chat_completion(
         self,
         system_prompt: str,
@@ -99,14 +120,11 @@ class ModelProvider:
         memory_exemplars: List[str],
         user_task: str,
         critique_feedback: str = "",
+        task_mode: str = "write",
     ) -> Tuple[str, str]:
         """
-        显式 Token 分级预算策略 (Token Budget Allocation Policy)：
-        - 角色人设 (System Persona): 20%
-        - 风格指纹 (Style DNA): 25%
-        - 风格记忆范例 (Memory Exemplars): 30%
-        - 任务要求与要点 (User Task): 15%
-        - 审校与反思历史 (Critique Feedback): 10%
+        动态自适应 Token 分级预算策略 (Dynamic Token Budget Allocation Policy)：
+        根据不同任务形态（新文创作、反思改写、社媒短帖、深度长文）动态调整配额比例。
         """
         model_name = self.llm_config.model.lower()
         max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
@@ -117,12 +135,20 @@ class ModelProvider:
 
         available_tokens = max(3000, max_window - self.llm_config.max_tokens - 1000)
 
-        # 各维度硬性预算配比
-        quota_persona = int(available_tokens * 0.20)
-        quota_style = int(available_tokens * 0.25)
-        quota_memory = int(available_tokens * 0.30)
-        quota_task = int(available_tokens * 0.15)
-        quota_critique = int(available_tokens * 0.10)
+        # 动态配比定义 (Persona, Style, Memory, Task, Critique)
+        mode_ratios = {
+            "write": (0.20, 0.25, 0.30, 0.15, 0.10),
+            "rewrite": (0.15, 0.15, 0.15, 0.35, 0.20),
+            "short_post": (0.15, 0.20, 0.40, 0.15, 0.10),
+            "deep_essay": (0.20, 0.25, 0.20, 0.25, 0.10),
+        }
+        r_persona, r_style, r_memory, r_task, r_critique = mode_ratios.get(task_mode, mode_ratios["write"])
+
+        quota_persona = int(available_tokens * r_persona)
+        quota_style = int(available_tokens * r_style)
+        quota_memory = int(available_tokens * r_memory)
+        quota_task = int(available_tokens * r_task)
+        quota_critique = int(available_tokens * r_critique)
 
         # 1. 裁剪并组装 System 部分
         safe_persona = self.truncate_tokens(system_persona, quota_persona)

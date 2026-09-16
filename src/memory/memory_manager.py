@@ -79,25 +79,41 @@ class MemoryManager:
             if p.startswith("#") and len(p.split("\n")) == 1:
                 continue
 
-            chunk_type = "argument"
-            if idx == 0:
-                chunk_type = "hook"
-            elif idx == total_paras - 1:
-                chunk_type = "conclusion"
-            elif len(p) < 90 and ("说白了" in p or "本质上" in p or "其实" in p or "！" in p or "必须" in p):
-                chunk_type = "quote"
+            # 篇章物理位置计算
+            pos_pct = round(idx / max(1, total_paras - 1), 2)
+            if pos_pct <= 0.2:
+                position = "opening"
+            elif pos_pct >= 0.8:
+                position = "ending"
+            else:
+                position = "body"
+
+            # 篇章结构功能语义显式判定 (Discourse Function Classification)
+            if idx == 0 or (position == "opening" and ("？" in p or "！" in p or "说白了" in p or "别闹" in p)):
+                func = "hook"
+            elif idx == total_paras - 1 or (position == "ending" and ("守住" in p or "这是" in p or "唯一" in p or "总结" in p)):
+                func = "conclusion"
+            elif len(p) <= 120 and ("比如" in p or "例如" in p or "看到一篇" in p or "扒了一份" in p or "案例" in p):
+                func = "example"
+            elif len(p) <= 100 and ("说白了" in p or "本质上" in p or "必须" in p or "从来不是" in p or "绝不" in p or "！" in p):
+                func = "quote"
+            else:
+                func = "argument"
 
             emotion = "客观分析"
             if "？" in p or "难道" in p:
                 emotion = "设问反思"
-            elif "！" in p or "绝不" in p or "别闹了" in p:
+            elif "！" in p or "绝不" in p or "别闹了" in p or "懦弱" in p:
                 emotion = "犀利强烈"
 
             chunk_id = str(uuid.uuid4())[:8]
             meta = ChunkMetadata(
                 chunk_id=chunk_id,
                 source=title,
-                type=chunk_type,
+                position=position,
+                position_pct=pos_pct,
+                function=func,
+                type=func,  # 兼容旧版 type 字段
                 topic="通用",
                 emotion=emotion,
                 style="深度思考",

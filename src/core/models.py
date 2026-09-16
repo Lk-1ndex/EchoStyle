@@ -6,7 +6,10 @@ class ChunkMetadata(BaseModel):
     """风格记忆切片富元数据 (Rich Metadata)"""
     chunk_id: str
     source: str
-    type: str = Field("argument", description="段落类型: hook(开篇), argument(论述), quote(金句), conclusion(收尾)")
+    position: str = Field("body", description="篇章位置: opening(开篇), body(主体论述), ending(结语收束)")
+    position_pct: float = Field(0.5, description="在原文章中的相对位置百分比 (0.0-1.0)")
+    function: str = Field("argument", description="功能分类: hook(吸引), argument(核心论点), example(生动案例), quote(警醒金句), conclusion(反思总结)")
+    type: str = Field("argument", description="兼容旧版字段: hook, argument, quote, conclusion")
     topic: str = Field("通用", description="主题领域")
     emotion: str = Field("中性", description="情绪色彩")
     style: str = Field("分析", description="文体特色")
@@ -14,15 +17,18 @@ class ChunkMetadata(BaseModel):
 
 
 class StatisticalMetrics(BaseModel):
-    """统计语言学特征模型 (扩展 TTR 词汇丰富度)"""
+    """统计语言学特征模型 (扩展 STTR 与长短句破空比)"""
     total_chars: int = Field(0, description="总字符数")
     total_sentences: int = Field(0, description="总有效句子数")
     total_paragraphs: int = Field(0, description="总段落数")
     avg_sentence_length: float = Field(0.0, description="平均句长（字符/句）")
     sentence_length_std: float = Field(0.0, description="句长标准差（衡量节奏起伏与长短波长）")
     avg_paragraph_length: float = Field(0.0, description="平均段长（句子/段）")
-    ttr: float = Field(0.0, description="词汇丰富度 Type-Token Ratio (0-1.0)")
+    ttr: float = Field(0.0, description="原始词汇丰富度 Type-Token Ratio (0-1.0)")
+    sttr: float = Field(0.0, description="标准化词汇丰富度 Standardized TTR (消除文本长度偏差)")
     unique_words_count: int = Field(0, description="独立不同词汇总量")
+    short_sentence_ratio: float = Field(0.0, description="爆发力极短句占比 (<10字，如'别闹了。')")
+    long_sentence_ratio: float = Field(0.0, description="复杂铺陈长句占比 (>40字)")
     punctuation_entropy: float = Field(0.0, description="标点符号使用多样性信息熵")
     punctuation_distribution: Dict[str, float] = Field(default_factory=dict, description="主要标点占比分布")
     transition_density: float = Field(0.0, description="转折与逻辑词密度（次/千字）")
@@ -52,10 +58,14 @@ class LexiconRhetoric(BaseModel):
 
 
 class DiscourseArchitecture(BaseModel):
-    """篇章逻辑与行文结构"""
-    opening_hook: str = Field(..., description="开篇习惯")
-    body_progression: str = Field(..., description="论点推进逻辑")
-    ending_style: str = Field(..., description="结尾模式")
+    """篇章逻辑与行文结构 (Discourse Style)"""
+    opening_hook: str = Field(..., description="开篇习惯描述")
+    body_progression: str = Field(..., description="论点推进逻辑描述")
+    ending_style: str = Field(..., description="结尾模式描述")
+    opening_pattern: str = Field("narrative_or_paradox", description="开篇模式: narrative_hook(故事), paradox_hook(反常识设问), quote_hook(金句直击), opinion_hook(暴论)")
+    progression_pattern: str = Field("inductive", description="论证推进流: inductive(个案->本质->价值观), dialectical(破常规谬误->立新见解), narrative_interwoven(叙议交织)")
+    ending_pattern: str = Field("aphorism_or_question", description="收尾模式: aphorism(金句警策), open_question(设问留白), call_to_action(呼吁行动)")
+
 
 
 class AntiPatterns(BaseModel):
@@ -143,8 +153,11 @@ class DeepStyleProfile(BaseModel):
 ### 量化句法统计指标精密约束：
 - **目标平均句长**：严格控制在【{q.avg_sentence_length:.1f} 字/句】左右。
 - **句长离散度(波长起伏)**：标准差保持在【{q.sentence_length_std:.1f}】。
-- **词汇丰富度 (TTR)**：维持在【{q.ttr:.2f}】的高丰富度水平。
+- **标准化词汇丰富度 (STTR)**：维持在【{q.sttr:.2f}】左右。
+- **短句破空比率**：短句(<10字)比例约【{q.short_sentence_ratio*100:.1f}%】，保持爆发力与呼吸停顿。
 - **标点多样性信息熵**：{q.punctuation_entropy:.2f}。
+- **篇章展开路径约束**：必须遵循作者【{self.qualitative.discourse.opening_hook} -> {self.qualitative.discourse.body_progression} -> {self.qualitative.discourse.ending_style}】推进。
+- **排斥 AI 模板**：严禁采用【定义概念 -> 罗列阐释 -> 综上总结】的平均主义八股架构！
 - **节奏动态**：{q.rhythm_pattern}
 """
             if "## 三、" in base_prompt:

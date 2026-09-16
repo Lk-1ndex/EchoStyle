@@ -35,17 +35,26 @@ class StylometricsAnalyzer:
         if total_sentences == 0:
             return StatisticalMetrics(total_chars=len(text), total_paragraphs=total_paragraphs)
 
-        # 3. 句长统计
+        # 3. 句长统计与长短句落差 (Burstiness & Cadence)
         sentence_lengths = [len(s) for s in sentences]
         avg_len = sum(sentence_lengths) / total_sentences
         variance = sum((l - avg_len) ** 2 for l in sentence_lengths) / total_sentences
         std_dev = math.sqrt(variance)
 
-        # 4. 词汇丰富度计算 (Type-Token Ratio, TTR)
+        # 统计短句破空率 (<=10字) 与复杂铺陈长句率 (>=40字)
+        short_count = sum(1 for l in sentence_lengths if l <= 10)
+        long_count = sum(1 for l in sentence_lengths if l >= 40)
+        short_ratio = round(short_count / total_sentences, 3)
+        long_ratio = round(long_count / total_sentences, 3)
+
+        # 4. 词汇丰富度计算 (Type-Token Ratio 与 Standardized TTR)
         clean_words = re.findall(r"[\u4e00-\u9fa5]{1,2}|[a-zA-Z0-9]+", text)
         total_tokens = max(1, len(clean_words))
         unique_types = len(set(clean_words))
         ttr = round(unique_types / total_tokens, 3)
+
+        # 标准化词汇丰富度 (STTR: Standardized TTR, 窗口大小 100，消除长度衰减)
+        sttr = cls._calculate_sttr(clean_words, window_size=100)
 
         # 5. 标点符号分布与信息熵 (Shannon Entropy)
         punc_counts = {}
@@ -95,10 +104,32 @@ class StylometricsAnalyzer:
             sentence_length_std=round(std_dev, 2),
             avg_paragraph_length=round(total_sentences / total_paragraphs, 2),
             ttr=ttr,
+            sttr=sttr,
             unique_words_count=unique_types,
+            short_sentence_ratio=short_ratio,
+            long_sentence_ratio=long_ratio,
             punctuation_entropy=round(entropy, 3),
             punctuation_distribution=punc_dist,
             transition_density=trans_density,
             transition_words=transition_counts,
             rhythm_pattern=rhythm,
         )
+
+    @classmethod
+    def _calculate_sttr(cls, tokens: List[str], window_size: int = 100) -> float:
+        """
+        计算标准化词汇丰富度 (Standardized TTR)：
+        按固定长度切片并计算局部 TTR 均值，消除文章总字数膨胀导致的 TTR 伪衰减。
+        """
+        if not tokens:
+            return 0.0
+        if len(tokens) <= window_size:
+            return round(len(set(tokens)) / len(tokens), 3)
+
+        num_chunks = len(tokens) // window_size
+        chunk_ttrs = []
+        for i in range(num_chunks):
+            chunk = tokens[i * window_size : (i + 1) * window_size]
+            chunk_ttrs.append(len(set(chunk)) / window_size)
+
+        return round(sum(chunk_ttrs) / len(chunk_ttrs), 3)
