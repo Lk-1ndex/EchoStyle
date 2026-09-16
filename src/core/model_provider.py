@@ -121,10 +121,12 @@ class ModelProvider:
         user_task: str,
         critique_feedback: str = "",
         task_mode: str = "write",
+        retry_count: int = 0,
     ) -> Tuple[str, str]:
         """
-        动态自适应 Token 分级预算策略 (Dynamic Token Budget Allocation Policy)：
-        根据不同任务形态（新文创作、反思改写、社媒短帖、深度长文）动态调整配额比例。
+        任务感知启发式预算 (Task-Aware Heuristic Token Budget) 与失败自适应重试分配：
+        根据任务形态预设比例，并在 Critic 质检失败触发多轮重构时（retry_count > 0），
+        自适应将更多 Token 配额倾斜向审校批注，实现精准定向修复。
         """
         model_name = self.llm_config.model.lower()
         max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
@@ -143,6 +145,13 @@ class ModelProvider:
             "deep_essay": (0.20, 0.25, 0.20, 0.25, 0.10),
         }
         r_persona, r_style, r_memory, r_task, r_critique = mode_ratios.get(task_mode, mode_ratios["write"])
+
+        # 失败自适应重配：随着重试轮次递增，加大批注反馈预算倾斜
+        if retry_count > 0:
+            extra_critique = min(0.15, retry_count * 0.05)
+            r_critique += extra_critique
+            r_persona = max(0.10, r_persona - extra_critique * 0.5)
+            r_style = max(0.10, r_style - extra_critique * 0.5)
 
         quota_persona = int(available_tokens * r_persona)
         quota_style = int(available_tokens * r_style)

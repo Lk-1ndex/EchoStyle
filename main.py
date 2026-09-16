@@ -47,9 +47,10 @@ def main():
     # 基准与科学评测命令
     p_bench = subparsers.add_parser("benchmark", help="运行文风建模与科学评测基准套件")
     p_bench.add_argument("--ab", action="store_true", help="运行完整 A/B 对照实验 (Baseline 0 vs Baseline 1 vs EchoStyle)")
-    p_bench.add_argument("--ablation", action="store_true", help="运行严谨消融实验 (Ablation Study: 4-Condition Matrix)")
-    p_bench.add_argument("--scaling", action="store_true", help="运行样本规模收敛实验 (Data Scaling Experiment)")
+    p_bench.add_argument("--ablation", action="store_true", help="运行 5 组严谨消融实验 (Ablation Study: 5-Condition Matrix)")
+    p_bench.add_argument("--scaling", action="store_true", help="运行 20 篇样本规模渐近收敛实验 (20-Sample Scaling Experiment with MSE)")
     p_bench.add_argument("--blind", action="store_true", help="运行规范化双盲评测 (Blind Pairwise Benchmark with 95%% Wilson CI)")
+    p_bench.add_argument("--failure", action="store_true", help="运行失败案例与系统边界深度剖析 (Failure Modes & Case Studies)")
 
     args = parser.parse_args()
     config = load_config()
@@ -143,6 +144,9 @@ def main():
         elif args.blind:
             from experiments.blind_benchmark import run_blind_benchmark
             run_blind_benchmark()
+        elif args.failure:
+            from experiments.failure_analysis import run_failure_analysis
+            run_failure_analysis()
         elif args.ab:
             from experiments.ab_benchmark import run_ab_benchmark
             run_ab_benchmark()

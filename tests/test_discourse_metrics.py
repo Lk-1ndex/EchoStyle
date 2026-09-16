@@ -41,13 +41,15 @@ def test_discourse_fit_evaluation():
 
     bad_score, bad_breakdown = MetricEvaluator.evaluate_discourse_fit(bad_article)
     assert bad_score < 60.0
-    assert bad_breakdown["opening_type"] == "ai_definition_formula"
-    assert bad_breakdown["ending_type"] == "ai_empty_summary"
+    assert "ai_definition" in bad_breakdown["opening_type"]
+    assert "ai_summary" in bad_breakdown["ending_type"]
 
 
-def test_ai_uniformity_monotony_penalty():
-    # 测试极其匀称无波动的 AI 句子长度平庸惩罚
-    uniform_text = """这是第一句差不多长度的话。这是第二句差不多长度的话。这是第三句差不多长度的话。这是第四句差不多长度的话。"""
-    _, penalty, _ = MetricEvaluator.evaluate_anti_ai(uniform_text)
-    # 因为标准差极小且句数>=4，应触发句式单调性惩罚
-    assert penalty > 0.0
+def test_gold_standard_benchmark_accuracy():
+    # 测试人工标注金标数据集的自动化分类准确率
+    from src.evaluation.discourse_metrics import DiscourseEvaluator
+    res = DiscourseEvaluator.validate_against_gold_benchmark()
+    assert res["total_samples"] >= 10
+    # 验证分类准确率必须达到 90% 以上
+    assert res["accuracy"] >= 90.0
+

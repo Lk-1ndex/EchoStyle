@@ -53,6 +53,12 @@ class CriticAgent(BaseAgent):
         )
         return action
 
+    def evaluate(self, draft: str, profile: DeepStyleProfile, state: AgentState | None = None) -> EvaluationReport:
+        """独立评估草稿并返回 EvaluationReport"""
+        if state is None:
+            state = AgentState()
+        return self.judge.evaluate(draft, profile)
+
     def run(self, state: AgentState, draft: str, profile: DeepStyleProfile) -> EvaluationReport:
         """兼容原有调用的基础接口"""
         action = self.evaluate_action(state, draft, profile)
