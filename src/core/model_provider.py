@@ -9,9 +9,9 @@ from src.core.exceptions import ModelProviderError
 class ModelProvider:
     """
     生产级模型抽象层 (Production Model Layer)：
-    1. 集成 tiktoken 工业标准 BPE 分词器，进行精准 Token 计费与滑窗截断；
-    2. 实现指数退避重试机制 (Exponential Backoff)，自动容错 429、502、503、超时等偶发网络异常；
-    3. 支持主备模型热降级 (Fallback Strategy)。
+    1. 集成 tiktoken 工业标准 BPE 分词器，进行精准 Token 计费与截断；
+    2. 实现确定性的 Token 分级预算配比策略 (20% 角色 / 25% 风格指纹 / 30% 记忆范例 / 15% 任务要点 / 10% 审校历史)；
+    3. 指数退避重试 (Exponential Backoff) 与主备模型降级。
     """
 
     MODEL_CONTEXT_WINDOWS = {
@@ -34,7 +34,6 @@ class ModelProvider:
         self.embedding_config = embedding_config or EmbeddingConfig()
         self.fallback_model = fallback_model
 
-        # 初始化标准分词器 (cl100k_base 为 GPT-4/DeepSeek 广泛兼容的分词字典)
         try:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         except Exception:
@@ -50,16 +49,11 @@ class ModelProvider:
         timeout: float = 120.0,
         max_retries: int = 3,
     ) -> str:
-        """
-        发起 Chat 请求，带指数退避重试与主备模型降级
-        """
         temp = temperature if temperature is not None else self.llm_config.temperature
         m_tokens = max_tokens if max_tokens is not None else self.llm_config.max_tokens
 
-        # 执行精准 Token 预算管理，避免超窗
         safe_sys_prompt, safe_user_prompt = self.fit_context_window(system_prompt, user_prompt)
 
-        # 优先使用主模型，失败重试耗尽后尝试备用模型
         models_to_try = [self.llm_config.model]
         if self.fallback_model and self.fallback_model != self.llm_config.model:
             models_to_try.append(self.fallback_model)
@@ -80,25 +74,105 @@ class ModelProvider:
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as net_err:
                     last_err = net_err
-                    print(f"[ModelProvider 警告] 网络异常 ({net_err})，第 {attempt + 1}/{max_retries} 次重试，退避等待 {delay:.1f}s...")
+                    print(f"[ModelProvider 警告] 网络异常 ({net_err})，第 {attempt + 1}/{max_retries} 次重试，等待 {delay:.1f}s...")
                     time.sleep(delay)
                     delay *= 2.0
                 except httpx.HTTPStatusError as http_err:
                     last_err = http_err
                     status = http_err.response.status_code
-                    # 针对 429 限流或 5xx 服务器临时故障进行指数退避重试
                     if status in [429, 500, 502, 503, 504]:
                         print(f"[ModelProvider 警告] HTTP {status} 临时错误，第 {attempt + 1}/{max_retries} 次重试，等待 {delay:.1f}s...")
                         time.sleep(delay)
                         delay *= 2.0
                     else:
-                        # 401 鉴权或 400 参数错误直接中断重试
                         break
                 except Exception as e:
                     last_err = e
                     break
 
         raise ModelProviderError(f"所有模型及重试策略均已耗尽，调用失败: {str(last_err)}") from last_err
+
+    def assemble_budgeted_prompt(
+        self,
+        system_persona: str,
+        style_dna: str,
+        memory_exemplars: List[str],
+        user_task: str,
+        critique_feedback: str = "",
+    ) -> Tuple[str, str]:
+        """
+        显式 Token 分级预算策略 (Token Budget Allocation Policy)：
+        - 角色人设 (System Persona): 20%
+        - 风格指纹 (Style DNA): 25%
+        - 风格记忆范例 (Memory Exemplars): 30%
+        - 任务要求与要点 (User Task): 15%
+        - 审校与反思历史 (Critique Feedback): 10%
+        """
+        model_name = self.llm_config.model.lower()
+        max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
+        for key, window in self.MODEL_CONTEXT_WINDOWS.items():
+            if key in model_name:
+                max_window = window
+                break
+
+        available_tokens = max(3000, max_window - self.llm_config.max_tokens - 1000)
+
+        # 各维度硬性预算配比
+        quota_persona = int(available_tokens * 0.20)
+        quota_style = int(available_tokens * 0.25)
+        quota_memory = int(available_tokens * 0.30)
+        quota_task = int(available_tokens * 0.15)
+        quota_critique = int(available_tokens * 0.10)
+
+        # 1. 裁剪并组装 System 部分
+        safe_persona = self.truncate_tokens(system_persona, quota_persona)
+        safe_style = self.truncate_tokens(style_dna, quota_style)
+
+        # 2. 裁剪并组装 Memory Few-shot
+        joined_memory = ""
+        for i, ex in enumerate(memory_exemplars, 1):
+            joined_memory += f"\n### 高光范例 {i}：\n> {ex.strip()}\n"
+        safe_memory = self.truncate_tokens(joined_memory, quota_memory)
+
+        system_prompt = f"{safe_persona}\n\n{safe_style}"
+        if safe_memory.strip():
+            system_prompt += f"\n\n## 风格感知检索召回的历史范例\n{safe_memory}"
+
+        # 3. 裁剪并组装 User Task 与 Critique 部分
+        safe_task = self.truncate_tokens(user_task, quota_task)
+        user_prompt = safe_task
+        if critique_feedback:
+            safe_critique = self.truncate_tokens(critique_feedback, quota_critique)
+            user_prompt += f"\n\n## 上一轮总编辑审校批注（重点反思修正）\n{safe_critique}"
+
+        return system_prompt, user_prompt
+
+    def fit_context_window(self, system_prompt: str, user_prompt: str) -> Tuple[str, str]:
+        """通用的保底滑窗检查"""
+        model_name = self.llm_config.model.lower()
+        max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
+        for key, window in self.MODEL_CONTEXT_WINDOWS.items():
+            if key in model_name:
+                max_window = window
+                break
+
+        available = max(3000, max_window - self.llm_config.max_tokens - 1000)
+        sys_tokens = self.count_tokens(system_prompt)
+        user_tokens = self.count_tokens(user_prompt)
+
+        if sys_tokens + user_tokens <= available:
+            return system_prompt, user_prompt
+
+        max_sys = int(available * 0.5)
+        if sys_tokens > max_sys:
+            system_prompt = self.truncate_tokens(system_prompt, max_sys)
+            sys_tokens = max_sys
+
+        remaining = available - sys_tokens
+        if user_tokens > remaining:
+            user_prompt = self.truncate_tokens(user_prompt, remaining)
+
+        return system_prompt, user_prompt
 
     def _execute_chat_http(
         self,
@@ -134,7 +208,6 @@ class ModelProvider:
             return data["choices"][0]["message"]["content"].strip()
 
     def get_embeddings(self, texts: List[str], timeout: float = 30.0) -> Optional[List[List[float]]]:
-        """获取密集向量 (Dense Embeddings)"""
         api_key = self.embedding_config.api_key or self.llm_config.api_key
         base_url = self.embedding_config.base_url or self.llm_config.base_url
         if not api_key:
@@ -160,48 +233,15 @@ class ModelProvider:
             pass
         return None
 
-    def fit_context_window(self, system_prompt: str, user_prompt: str) -> Tuple[str, str]:
-        """使用精准 Token 估算管理上下文滑窗"""
-        model_name = self.llm_config.model.lower()
-        max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
-        for key, window in self.MODEL_CONTEXT_WINDOWS.items():
-            if key in model_name:
-                max_window = window
-                break
-
-        # 预留输出 Token 与安全边界
-        available_input_tokens = max(3000, max_window - self.llm_config.max_tokens - 1000)
-
-        sys_tokens = self.count_tokens(system_prompt)
-        user_tokens = self.count_tokens(user_prompt)
-
-        if sys_tokens + user_tokens <= available_input_tokens:
-            return system_prompt, user_prompt
-
-        # 若超额，保障 System Prompt 优先占比
-        max_sys = int(available_input_tokens * 0.45)
-        if sys_tokens > max_sys:
-            system_prompt = self.truncate_tokens(system_prompt, max_sys)
-            sys_tokens = max_sys
-
-        remaining_user = available_input_tokens - sys_tokens
-        if user_tokens > remaining_user:
-            user_prompt = self.truncate_tokens(user_prompt, remaining_user)
-
-        return system_prompt, user_prompt
-
     def count_tokens(self, text: str) -> int:
-        """使用 tiktoken 精准计算 Token 数量"""
         if self.tokenizer:
             try:
                 return len(self.tokenizer.encode(text, disallowed_special=()))
             except Exception:
                 pass
-        # 降级备用
         return int(len(text) * 0.7) + 5
 
     def truncate_tokens(self, text: str, max_tokens: int) -> str:
-        """精准截断文本至指定 Token 阈值以内"""
         if not text:
             return ""
         if self.count_tokens(text) <= max_tokens:
@@ -210,9 +250,9 @@ class ModelProvider:
         if self.tokenizer:
             try:
                 tokens = self.tokenizer.encode(text, disallowed_special=())[:max_tokens]
-                return self.tokenizer.decode(tokens) + "\n...(由于上下文窗口预算限制，已执行精准裁剪)..."
+                return self.tokenizer.decode(tokens) + "\n...(已执行分级预算安全裁剪)..."
             except Exception:
                 pass
 
         char_limit = int(max_tokens * 1.4)
-        return text[:char_limit] + "\n...(由于上下文窗口预算限制，已执行精准裁剪)..."
+        return text[:char_limit] + "\n...(已执行分级预算安全裁剪)..."

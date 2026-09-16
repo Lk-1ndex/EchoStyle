@@ -8,8 +8,9 @@ from .vector_store import VectorStore
 
 class MemoryManager:
     """
-    长期风格记忆管理器 (Style Memory RAG)：
-    实现历史文章的多维切片、富元数据（Rich Metadata）打标与 Hybrid 混合检索。
+    风格感知记忆管理器 (Style-Aware Memory Manager)：
+    不仅仅根据主题找答案，更根据【篇章结构与行文风格】(hook/quote/argument/conclusion)
+    与情感色彩进行定向精准召回。
     """
 
     def __init__(
@@ -21,9 +22,27 @@ class MemoryManager:
         self.vector_store = vector_store or VectorStore(embedding_config=embedding_config, llm_config=llm_config)
 
     def ingest_article(self, title: str, content: str) -> int:
-        """将文章切片、打标并摄入记忆库"""
         chunks = self._chunk_article(title, content)
         return self.vector_store.add_chunks(chunks)
+
+    def retrieve_style_aware(
+        self,
+        query: str,
+        target_type: Optional[str] = None,
+        top_k: int = 3,
+    ) -> List[str]:
+        """
+        风格感知定向检索：
+        :param query: 主题与意图
+        :param target_type: 可选 'hook'(开篇痛点), 'quote'(犀利金句), 'argument'(核心论据), 'conclusion'(收尾)
+        :param top_k: 召回数量
+        """
+        results = self.vector_store.hybrid_search(
+            query=query,
+            top_k=top_k,
+            type_filter=target_type
+        )
+        return [r["content"] for r in results]
 
     def retrieve_dynamic_few_shots(
         self,
@@ -31,11 +50,8 @@ class MemoryManager:
         top_k: int = 3,
         type_filter: Optional[str] = None,
     ) -> List[str]:
-        """
-        语义动态召回最匹配的原文高光片段
-        """
-        results = self.vector_store.hybrid_search(query, top_k=top_k, type_filter=type_filter)
-        return [r["content"] for r in results]
+        """组合多风格类型的均衡 Few-shot 召回"""
+        return self.retrieve_style_aware(query, target_type=type_filter, top_k=top_k)
 
     def get_memory_stats(self) -> Dict[str, Any]:
         all_chunks = self.vector_store.get_all()
@@ -63,7 +79,6 @@ class MemoryManager:
             if p.startswith("#") and len(p.split("\n")) == 1:
                 continue
 
-            # 段落类型感知
             chunk_type = "argument"
             if idx == 0:
                 chunk_type = "hook"
@@ -72,7 +87,6 @@ class MemoryManager:
             elif len(p) < 90 and ("说白了" in p or "本质上" in p or "其实" in p or "！" in p or "必须" in p):
                 chunk_type = "quote"
 
-            # 情绪/风格初级启发式推断
             emotion = "客观分析"
             if "？" in p or "难道" in p:
                 emotion = "设问反思"

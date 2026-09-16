@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from src.analyzer.stylometrics import StatisticalMetrics, StylometricsAnalyzer
 
 
@@ -73,3 +73,47 @@ class MetricEvaluator:
             "target_ttr": target_metrics.ttr,
         }
         return overall_fit, breakdown
+
+    @classmethod
+    def calculate_stylometric_deviation(
+        cls,
+        generated_text: str,
+        target_metrics: StatisticalMetrics,
+    ) -> Dict[str, Any]:
+        """
+        计算生成文本相对于目标作者基准的客观文风偏离度 (Delta Stylometrics)
+        """
+        gen_metrics = StylometricsAnalyzer.analyze(generated_text)
+        _, _, detected_cliches = cls.evaluate_anti_ai(generated_text)
+
+        delta_avg_len = abs(gen_metrics.avg_sentence_length - target_metrics.avg_sentence_length)
+        delta_std = abs(gen_metrics.sentence_length_std - target_metrics.sentence_length_std)
+        delta_ttr = abs(gen_metrics.ttr - target_metrics.ttr)
+        delta_entropy = abs(gen_metrics.punctuation_entropy - target_metrics.punctuation_entropy)
+
+        composite_dev = round(
+            delta_avg_len * 1.0 +
+            delta_std * 1.5 +
+            delta_ttr * 50.0 +
+            len(detected_cliches) * 5.0,
+            2
+        )
+
+        return {
+            "gen_avg_len": round(gen_metrics.avg_sentence_length, 2),
+            "target_avg_len": round(target_metrics.avg_sentence_length, 2),
+            "delta_avg_len": round(delta_avg_len, 2),
+            "gen_std": round(gen_metrics.sentence_length_std, 2),
+            "target_std": round(target_metrics.sentence_length_std, 2),
+            "delta_std": round(delta_std, 2),
+            "gen_ttr": round(gen_metrics.ttr, 3),
+            "target_ttr": round(target_metrics.ttr, 3),
+            "delta_ttr": round(delta_ttr, 3),
+            "gen_entropy": round(gen_metrics.punctuation_entropy, 2),
+            "target_entropy": round(target_metrics.punctuation_entropy, 2),
+            "delta_entropy": round(delta_entropy, 2),
+            "cliche_count": len(detected_cliches),
+            "detected_cliches": detected_cliches,
+            "composite_deviation_score": composite_dev,
+        }
+

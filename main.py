@@ -44,6 +44,10 @@ def main():
     p_write.add_argument("-w", "--words", type=int, default=1500, help="目标字数")
     p_write.add_argument("-o", "--output", help="最终成文保存路径")
 
+    # 基准评测命令
+    p_bench = subparsers.add_parser("benchmark", help="运行文风建模与仿写基准测试 (支持 --ab 对照实验)")
+    p_bench.add_argument("--ab", action="store_true", help="运行完整 A/B 对照实验 (Baseline 0 vs Baseline 1 vs EchoStyle)")
+
     args = parser.parse_args()
     config = load_config()
     coordinator = CoordinatorAgent(config)
@@ -125,6 +129,14 @@ def main():
             console.print(f"[bold green]成文已成功保存至:[/bold green] {args.output}")
         else:
             console.print(Panel(final_article, title="终审成文"))
+
+    elif args.command == "benchmark":
+        if args.ab:
+            from experiments.ab_benchmark import run_ab_benchmark
+            run_ab_benchmark()
+        else:
+            from benchmark import run_benchmark
+            run_benchmark()
 
     else:
         parser.print_help()
