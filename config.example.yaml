@@ -1,0 +1,14 @@
+# 大模型 API 配置 (支持 OpenAI 兼容格式，如 DeepSeek, Claude, GPT-4o, Qwen, Ollama 等)
+llm:
+  api_key: "your-api-key-here"
+  base_url: "https://api.deepseek.com/v1"  # 默认使用 DeepSeek，也可换成任何兼容地址
+  model: "deepseek-chat"
+  temperature: 0.7
+  max_tokens: 4096
+
+# 解析与清洗配置
+extractor:
+  pdf_engine: "markitdown"  # 可选: "markitdown" (极速标准模式) 或 "mineru" (深度视觉模式)
+  mineru_command: "magic-pdf"
+  clean_noise: true
+  repair_linebreaks: true
