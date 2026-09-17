@@ -285,6 +285,58 @@ def test_rrf_insertion_order_invariance_and_top_n_window():
         assert "irr_2" not in [r["id"] for r in res1]
 
 
+def test_dense_search_tie_breaking_by_id():
+    """验证 dense_search 在候选切片余弦相似度完全相同时，依据 chunk ID 升序确定性破平，杜绝入库顺序偏差"""
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file1 = Path(tmp_dir) / "dense_tie1.json"
+        store_file2 = Path(tmp_dir) / "dense_tie2.json"
+        s1 = VectorStore(storage_path=str(store_file1))
+        s2 = VectorStore(storage_path=str(store_file2))
+
+        # 两个切片具有完全相同的 embedding 向量 (相似度相同)
+        chunk_a = {"id": "chunk_aaa", "content": "内容相同切片 A", "embedding": [1.0, 0.0, 0.0]}
+        chunk_b = {"id": "chunk_bbb", "content": "内容相同切片 B", "embedding": [1.0, 0.0, 0.0]}
+
+        # 逆向入库
+        s1.chunks = [dict(chunk_b), dict(chunk_a)]
+        s2.chunks = [dict(chunk_a), dict(chunk_b)]
+
+        with patch.object(s1.model_provider, "get_embeddings", return_value=[[1.0, 0.0, 0.0]]), \
+             patch.object(s2.model_provider, "get_embeddings", return_value=[[1.0, 0.0, 0.0]]):
+            r1 = s1.dense_search("测试查询", top_k=2)
+            r2 = s2.dense_search("测试查询", top_k=2)
+
+            # 无论切片在库中的先后顺序如何，排序结果必须完全一致（按 ID 升序破平，chunk_aaa 优先）
+            assert [c["id"] for c in r1] == ["chunk_aaa", "chunk_bbb"]
+            assert [c["id"] for c in r2] == ["chunk_aaa", "chunk_bbb"]
+
+
+def test_hybrid_search_and_add_chunks_without_explicit_id():
+    """验证 add_chunks 和 hybrid_search 在切片缺少 explicit id 字段时能健壮处理，绝不抛出 KeyError"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "no_id_store.json"
+        s = VectorStore(storage_path=str(store_file))
+
+        # 传入缺少 id 的切片字典
+        raw_chunks = [
+            {"content": "深度学习大模型文风迁移与智能写作技术。"},
+            {"content": "红烧牛肉面的家常做法与配方。"},
+        ]
+        added = s.add_chunks(raw_chunks)
+        assert added == 2
+        # 验证自动赋予了 id
+        assert "id" in s.chunks[0]
+        assert "id" in s.chunks[1]
+
+        # 验证 hybrid_search 正常检索出匹配切片
+        results = s.hybrid_search("深度学习大模型", top_k=1, require_dense=False)
+        assert len(results) == 1
+        assert "深度学习" in results[0]["content"]
+
+
+
 
 
 

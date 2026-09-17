@@ -63,8 +63,12 @@ class VectorStore:
                         query_dim=existing_dim, chunk_dim=first_dim, chunk_id=chunks[0].get("id")
                     )
 
+        import uuid
+
         added = 0
         for i, chunk in enumerate(chunks):
+            if "id" not in chunk:
+                chunk["id"] = str(uuid.uuid4())[:8]
             chunk["embedding"] = embeddings[i] if embeddings and i < len(embeddings) else None
             self.chunks.append(chunk)
             added += 1
@@ -118,7 +122,8 @@ class VectorStore:
             emb = c["embedding"]
             score = self._cosine_similarity(query_dense, emb, chunk_id=c.get("id"))
             dense_scores.append((score, c))
-        dense_scores.sort(key=lambda x: x[0], reverse=True)
+        # 确定性破平：得分相同时按 chunk id 升序排序，杜绝入库顺序偏差 (Insertion-Order Bias)
+        dense_scores.sort(key=lambda x: (-x[0], str(x[1].get("id", ""))))
         results = []
         for score, c in dense_scores[:top_k]:
             item = dict(c)
@@ -175,12 +180,13 @@ class VectorStore:
         dense_ranks: Dict[str, int] = {}
         if query_dense and has_chunk_embs:
             dense_scores = []
-            for c in candidates:
+            for idx, c in enumerate(candidates):
                 emb = c.get("embedding")
+                cid = str(c.get("id", idx))
                 if emb is not None:
-                    score = self._cosine_similarity(query_dense, emb, chunk_id=c.get("id"))
+                    score = self._cosine_similarity(query_dense, emb, chunk_id=cid)
                     if score > 0:
-                        dense_scores.append((score, c["id"]))
+                        dense_scores.append((score, cid))
             # 按相似度降序排序（得分相同时按 ID 升序确定性破平，杜绝入库顺序偏差），仅截取有效 top_N 赋予绝对排名 (1-indexed)
             dense_scores.sort(key=lambda x: (-x[0], str(x[1])))
             for rank_idx, (_, cid) in enumerate(dense_scores[:rank_window], start=1):
@@ -190,11 +196,12 @@ class VectorStore:
         # 严格过滤 score > 0 的有效文档，仅截取 top_N 赋予稀疏绝对排名
         query_tokens = self._tokenize(query)
         sparse_scores = []
-        for c in candidates:
-            c_tokens = self._tokenize(c["content"])
+        for idx, c in enumerate(candidates):
+            cid = str(c.get("id", idx))
+            c_tokens = self._tokenize(c.get("content", ""))
             score = self._sparse_similarity(query_tokens, c_tokens)
             if score > 0:
-                sparse_scores.append((score, c["id"]))
+                sparse_scores.append((score, cid))
         # 按稀疏分数降序排序（得分相同时按 ID 升序确定性破平，杜绝入库顺序偏差），仅截取有效 top_N 赋予绝对排名
         sparse_scores.sort(key=lambda x: (-x[0], str(x[1])))
         sparse_ranks: Dict[str, int] = {}
@@ -208,7 +215,7 @@ class VectorStore:
         if not candidate_cids:
             return []
 
-        cid_to_chunk = {c["id"]: c for c in candidates}
+        cid_to_chunk = {str(c.get("id", idx)): c for idx, c in enumerate(candidates)}
         rrf_scores: List[Tuple[float, Dict[str, Any]]] = []
         for cid in candidate_cids:
             c = cid_to_chunk.get(cid)

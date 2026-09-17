@@ -36,6 +36,26 @@ JUDGE_USER_PROMPT_TEMPLATE = """## 目标作者文风指南
 """
 
 
+def _extract_json_payload(text: str) -> dict:
+    """鲁棒的 JSON 提取工具：支持去除 Markdown 代码块包裹、提取括号内 JSON 及清除末尾非法逗号"""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            raw_json = match.group(0)
+            try:
+                return json.loads(raw_json)
+            except json.JSONDecodeError:
+                cleaned = re.sub(r",\s*([\]}])", r"\1", raw_json)
+                return json.loads(cleaned)
+        raise
+
+
 class LLMJudge:
     """
     EchoEval 综合评测裁判专家：
@@ -130,11 +150,7 @@ class LLMJudge:
         )
 
     def _extract_json(self, text: str) -> dict:
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\n", "", text)
-            text = re.sub(r"\n```$", "", text)
-        return json.loads(text)
+        return _extract_json_payload(text)
 
 
 class EvaluatorPersona(BaseModel):
@@ -345,13 +361,20 @@ class IndependentEvaluator:
 
             if "radar" in parsed and isinstance(parsed["radar"], dict):
                 r = parsed["radar"]
-                radar = {
+                radar_candidate = {
                     "语气视角": float(r.get("tone", fidelity)),
                     "句式节奏": stylometric_similarity,
                     "用词口癖": float(r.get("lexicon", fidelity)),
                     "篇章逻辑": float(r.get("discourse", logic_depth)),
                     "去AI味": anti_ai_score,
                 }
+                if self.strict:
+                    for r_name, r_val in radar_candidate.items():
+                        if not (0.0 <= r_val <= 100.0):
+                            raise ValueError(f"裁判输出 radar 维度超出有效范围 [0-100] ({r_name}={r_val}): {parsed}")
+                    radar = radar_candidate
+                else:
+                    radar = {k: max(0.0, min(100.0, v)) for k, v in radar_candidate.items()}
             feedback = parsed.get("critique_feedback", feedback)
         except Exception as e:
             if self.strict:
@@ -396,20 +419,5 @@ class IndependentEvaluator:
         )
 
     def _extract_json(self, text: str) -> dict:
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\n?", "", text)
-            text = re.sub(r"\n?```$", "", text)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if match:
-                raw_json = match.group(0)
-                try:
-                    return json.loads(raw_json)
-                except json.JSONDecodeError:
-                    cleaned = re.sub(r",\s*([\]}])", r"\1", raw_json)
-                    return json.loads(cleaned)
-            raise
+        return _extract_json_payload(text)
 

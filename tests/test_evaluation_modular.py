@@ -62,3 +62,30 @@ def test_composite_echoscore_penalizes_custom_forbidden_words():
     assert result.cliche_penalty == 10.0
     assert "不可替代" in result.detected_cliches
 
+
+def test_composite_echoscore_handles_none_target_metrics():
+    """验证当 target_metrics 为 None 时，CompositeEvaluator 安全降级为默认基准 STTR，绝不触发 AttributeError 崩溃"""
+    profile = DeepStyleProfile(
+        name="测试空量化指标",
+        qualitative=StyleProfile(
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=[], metaphor_style="生活化", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="设问", body_progression="递进", ending_style="金句"),
+            anti_patterns=AntiPatterns()
+        )
+    )
+
+    # 传入 target_metrics=None
+    result = CompositeEvaluator.calculate_echoscore(
+        generated_text="这是一个简短的测试成文。",
+        target_metrics=None,
+        target_profile=profile,
+        llm_fidelity_score=80.0
+    )
+
+    assert result is not None
+    assert 0.0 <= result.echo_score <= 100.0
+    assert result.lexical_authenticity > 0.0
+
+

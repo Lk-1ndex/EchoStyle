@@ -1,6 +1,6 @@
 # EchoStyle 3.2 严格单变量消融实验报告 (Strict Single-Variable Matrix Report)
 
-- **评测时间**：2026-09-17 17:11:26
+- **评测时间**：2026-09-17 17:19:37
 - **评测规模**：5 个领域正交主题 × 5 次采样 = 共 25 组样本/条件
 > ⚠️ **免责声明与模式标记 (SIMULATION MODE / NOT A REAL BENCHMARK)**：
 > 本报告生成于**离线模拟数据模式**（未检测到真实有效 API Key 或显式指定 `--simulate`）。

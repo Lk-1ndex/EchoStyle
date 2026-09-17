@@ -40,7 +40,11 @@ class CompositeEvaluator:
         rhythm_score, rhythm_breakdown = RhythmEvaluator.evaluate_rhythm_fit(generated_text, target_metrics)
 
         # 3. 词汇标准化丰富度 (Lexical Authenticity)
-        target_sttr = target_metrics.sttr if target_metrics.sttr > 0 else target_metrics.ttr
+        target_sttr = (
+            target_metrics.sttr
+            if (target_metrics and target_metrics.sttr > 0)
+            else (target_metrics.ttr if (target_metrics and target_metrics.ttr > 0) else 0.70)
+        )
         lexical_score, lex_breakdown = LexicalEvaluator.evaluate_lexical_authenticity(generated_text, target_sttr)
 
         # 4. 违规套话扣分 (Cliche Penalty)

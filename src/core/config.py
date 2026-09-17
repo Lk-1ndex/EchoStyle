@@ -95,5 +95,19 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
             data["evaluator"] = {}
         data["evaluator"]["model"] = os.getenv("EVALUATOR_MODEL")
 
+    # 向量 Embedding 环境变量
+    if os.getenv("EMBEDDING_API_KEY"):
+        if "embedding" not in data:
+            data["embedding"] = {}
+        data["embedding"]["api_key"] = os.getenv("EMBEDDING_API_KEY")
+    if os.getenv("EMBEDDING_BASE_URL"):
+        if "embedding" not in data:
+            data["embedding"] = {}
+        data["embedding"]["base_url"] = os.getenv("EMBEDDING_BASE_URL")
+    if os.getenv("EMBEDDING_MODEL"):
+        if "embedding" not in data:
+            data["embedding"] = {}
+        data["embedding"]["model"] = os.getenv("EMBEDDING_MODEL")
+
     return AppConfig(**data)
 

@@ -277,5 +277,112 @@ def test_ablation_study_evaluate_condition_run_retries_and_excludes_on_failure()
     assert strict_evaluator.model_provider.chat_completion.call_count == 2
 
 
+def test_independent_evaluator_strict_radar_out_of_bounds():
+    """验证 IndependentEvaluator 在 strict=True 时对 radar 评分超限 [0-100] 执行 Fail-Closed 阻断"""
+    import pytest
+    from unittest.mock import MagicMock
+    from src.core.config import LLMConfig
+    from src.evaluation.judge import IndependentEvaluator
+    from src.core.exceptions import EvaluationUnavailableError
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns
+    )
+
+    llm_conf = LLMConfig()
+    profile = DeepStyleProfile(
+        name="测试",
+        qualitative=StyleProfile(
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活化", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="设问", body_progression="递进", ending_style="金句"),
+            anti_patterns=AntiPatterns(forbidden_words=[])
+        )
+    )
+
+    strict_evaluator = IndependentEvaluator(llm_conf, strict=True)
+    # 模拟 radar 维度超出 100 分
+    strict_evaluator.model_provider.chat_completion = MagicMock(
+        return_value='{"style_fidelity": 80.0, "logic_depth": 85.0, "human_preference": 80.0, "radar": {"tone": 150.0}}'
+    )
+
+    with pytest.raises(EvaluationUnavailableError) as exc:
+        strict_evaluator.evaluate("这是待测文章", profile)
+    assert "radar" in str(exc.value) and "超出有效范围" in str(exc.value)
+
+
+def test_llm_judge_robust_json_extraction_with_markdown_prelude():
+    """验证 LLMJudge 与 IndependentEvaluator 共享鲁棒 JSON 提取器，在 Markdown 前缀存在时不会解析崩溃降级"""
+    from unittest.mock import MagicMock
+    from src.core.config import LLMConfig
+    from src.evaluation.judge import LLMJudge
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns
+    )
+
+    llm_conf = LLMConfig()
+    judge = LLMJudge(llm_conf)
+    profile = DeepStyleProfile(
+        name="测试",
+        qualitative=StyleProfile(
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=[], metaphor_style="生活化", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="设问", body_progression="递进", ending_style="金句"),
+            anti_patterns=AntiPatterns(forbidden_words=[])
+        )
+    )
+
+    # 模拟大模型输出带有思维链前缀与后置解释的 Markdown JSON
+    complex_llm_reply = """思考过程：文章结构紧凑，语气独立犀利。
+```json
+{
+  "style_fidelity": 92.0,
+  "logic_depth": 88.0,
+  "human_preference": 91.0,
+  "radar": {
+    "tone": 92.0,
+    "lexicon": 90.0,
+    "discourse": 88.0,
+  },
+  "critique_feedback": "行文极具质感，保持了作者的呼吸节奏。"
+}
+```
+以上为详细审校意见。"""
+
+    judge.model_provider.chat_completion = MagicMock(return_value=complex_llm_reply)
+    report = judge.evaluate("这是待测文章", profile)
+
+    # 验证成功提取并正确应用了大模型评分，绝未静默降级为 80/85/80
+    assert report.style_fidelity == 92.0
+    assert report.logic_depth == 88.0
+    assert report.llm_judge_score == 91.0
+    assert "保持了作者的呼吸节奏" in report.feedback
+
+
+def test_load_config_parses_embedding_environment_variables(monkeypatch):
+    """验证 load_config 优先解析 EMBEDDING_API_KEY, EMBEDDING_BASE_URL, EMBEDDING_MODEL 环境变量"""
+    import tempfile
+    from pathlib import Path
+    from src.core.config import load_config
+
+    monkeypatch.setenv("EMBEDDING_API_KEY", "sk-custom-embedding-key")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://api.custom-emb.com/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "custom-emb-text-v1")
+
+    with tempfile.TemporaryDirectory() as d:
+        dummy_conf = Path(d) / "config.yaml"
+        dummy_conf.write_text("llm:\n  api_key: 'sk-llm'\n", encoding="utf-8")
+        conf = load_config(str(dummy_conf))
+
+        assert conf.embedding.api_key == "sk-custom-embedding-key"
+        assert conf.embedding.base_url == "https://api.custom-emb.com/v1"
+        assert conf.embedding.model == "custom-emb-text-v1"
+
+
+
+
 
 

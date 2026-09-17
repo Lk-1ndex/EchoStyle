@@ -187,7 +187,7 @@ python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什�
 ```bash
 uv run pytest
 ```
-测试运行结果：**54 passed, 1 skipped (1 skipped 用于隔离真实外连网络)**。
+测试运行结果：**60 passed, 1 skipped (1 skipped 用于隔离真实外连网络)**。
 
 - **持续集成 (GitHub Actions)**：CI 工作流已正式部署于 [`.github/workflows/pytest.yml`](.github/workflows/pytest.yml)。
   > *注：若通过 GitHub CLI 或 PAT 提交工作流文件触发权限拦截（`refusing to allow a Personal Access Token to create or update workflow without workflow scope`），需在 GitHub Developer Settings 中为 Token 开启 `workflow` 作用域，或通过 GitHub Web 页面提交合并。*
@@ -218,7 +218,7 @@ EchoStyle/
 │   ├── failure_analysis.py  # 失败案例与系统边界深度剖析
 │   ├── blind_benchmark.py   # 规范化成对盲评基准套件
 │   └── ab_benchmark.py      # 三方 A/B 对照基准
-├── tests/             # 单元与集成测试套件 (54 passed, 1 skipped)
+├── tests/             # 单元与集成测试套件 (60 passed, 1 skipped)
 ├── profiles/          # 文风档案、记忆切片与 Benchmark 评测报告 (Markdown / JSON)
 ├── benchmark.py       # 基准测试执行脚本
 ├── main.py            # CLI 命令行调度入口

@@ -465,7 +465,7 @@ def run_ablation_study(
                 # 1. Condition A0: Vanilla Baseline 0 (纯通用外部基线)
                 sys_a0 = "你是一位专业的文章撰写助手，请围绕给定的选题写一篇深刻的文章。"
                 user_a0 = f"围绕以下新主题创作一篇完整的文章：\n- **文章主题**：{t_topic}\n- **核心论述要点**：\n{t_points}\n- **目标字数**：1000 左右\n\n请直接输出成文全文。"
-                art_a0 = provider.chat(sys_a0, user_a0, temperature=0.7)
+                art_a0 = provider.chat(sys_a0, user_a0, temperature=config.llm.temperature)
 
                 # 2. Condition A1: Writer Scaffolding Baseline (工程基准)
                 state_a1 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)

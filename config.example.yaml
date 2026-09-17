@@ -14,10 +14,22 @@ evaluator:
   temperature: 0.0
   max_tokens: 4096
 
+# 向量 Embedding 模型配置 (支持 OpenAI 兼容格式，用于 Dense 与 Hybrid RAG 检索)
+embedding:
+  api_key: ""                            # 留空则默认复用 llm.api_key
+  base_url: ""                           # 留空则默认复用 llm.base_url
+  model: "text-embedding-3-small"        # 向量模型名称
+
+# 多智能体调度与状态机配置
+agent:
+  max_reflections: 2                     # Critic Agent 触发重写的最大自省反思轮次
+  quality_threshold: 80.0                # 成品合格质量分阈值 (低于则触发反思重写)
+
 # 解析与清洗配置
 extractor:
   pdf_engine: "markitdown"  # 可选: "markitdown" (极速标准模式) 或 "mineru" (深度视觉模式)
   mineru_command: "magic-pdf"
   clean_noise: true
   repair_linebreaks: true
+
 
