@@ -13,14 +13,14 @@ from .critic_agent import CriticAgent
 
 class CoordinatorAgent(BaseAgent):
     """
-    中央调度与动态规划智能体 (Autonomous Planning & State Machine Coordinator)：
-    1. 基于 ToolRegistry 统一管理并动态调度各专业工具；
-    2. 具备 Checkpoint 快照与真回滚 (Rollback) 能力；
-    3. 完整实现 run() 抽象接口，驱动有限状态机全生命周期流转。
+    受控工作流调度与状态机编排中枢 (Controlled Workflow & State Machine Coordinator)：
+    1. 基于 ToolRegistry 统一管理并确定性编排各专业智能体工具；
+    2. 具备内容快照 (DraftCheckpoint) 与有限状态机 (FSM) 失败回滚能力；
+    3. 完整实现 run() 契约规范，驱动写作、质检、反思重构全生命周期流转。
     """
 
     def __init__(self, config: AppConfig, memory_manager: Optional[MemoryManager] = None):
-        super().__init__(name="CoordinatorAgent", description="智能体调度中枢，负责意图理解、工具动态编排与有限状态机驱动")
+        super().__init__(name="CoordinatorAgent", description="工作流调度中枢，负责受控工具编排与有限状态机驱动")
         self.config = config
         self.memory_manager = memory_manager or MemoryManager(
             embedding_config=config.embedding,
@@ -74,6 +74,7 @@ class CoordinatorAgent(BaseAgent):
         key_points: str = "",
         word_count: int = 1500,
         target_audience: str = "大众读者",
+        initial_draft: Optional[str] = None,
         **kwargs
     ) -> Tuple[str, EvaluationReport, AgentState]:
         """
@@ -107,8 +108,14 @@ class CoordinatorAgent(BaseAgent):
         # 动态分支 2：创建初稿前检查点 (CheckPoint)
         state.create_checkpoint("pre_draft")
 
-        # 动态调用创作工具
-        draft = self.tool_registry.get("draft_tool").execute(state, profile=active_profile)
+        # 动态调用创作工具 (若传入 initial_draft 则直接复用为初稿，保障单变量实验绝对可控)
+        if initial_draft is not None:
+            draft = initial_draft
+            if state.current_status == AgentStatus.IDLE:
+                state.transition_to(AgentStatus.DRAFTING, "加载外部初稿 (单变量严格对照)")
+            state.record_draft("WriterAgent", draft)
+        else:
+            draft = self.tool_registry.get("draft_tool").execute(state, profile=active_profile)
         state.create_checkpoint("first_draft")
 
         # 动态分支 3：调用质检决策工具
@@ -147,14 +154,19 @@ class CoordinatorAgent(BaseAgent):
             else:
                 state.create_checkpoint("best_version")
 
-        # 终态判定
-        final_report = critique_action.detailed_report or state.latest_report
-        if critique_action.decision == "ACCEPT":
-            state.transition_to(AgentStatus.COMPLETED, f"终审圆满通过！综合得分: {final_report.overall_score:.1f} 分。")
+        # 终态判定：若触发回滚保护，优先以回滚后 state.latest_report 为准
+        final_report = state.latest_report or critique_action.detailed_report
+        final_score = final_report.overall_score if final_report else critique_action.score
+        threshold = getattr(self.critic_agent, "quality_threshold", 80.0)
+        has_cliches = bool(final_report.detected_cliches) if final_report else bool(critique_action.detected_cliches)
+        is_accepted = (final_score >= threshold and not has_cliches)
+
+        if is_accepted:
+            state.transition_to(AgentStatus.COMPLETED, f"终审圆满通过！综合得分: {final_score:.1f} 分。")
         else:
             state.transition_to(
                 AgentStatus.COMPLETED_WITH_WARNING,
-                f"反思重试轮次已满但未达ACCEPT阈值，降级输出当前最高质量版本 (得分: {final_report.overall_score:.1f})。"
+                f"反思重试轮次已满但未达ACCEPT阈值，降级输出当前最高质量版本 (得分: {final_score:.1f})。"
             )
 
         return draft, final_report, state
@@ -167,6 +179,7 @@ class CoordinatorAgent(BaseAgent):
         word_count: int = 1500,
         target_audience: str = "大众读者",
         state: Optional[AgentState] = None,
+        initial_draft: Optional[str] = None,
     ) -> Tuple[str, EvaluationReport, AgentState]:
         """保持原有方法名兼容的统一包装"""
         st = state or AgentState()
@@ -177,6 +190,7 @@ class CoordinatorAgent(BaseAgent):
             key_points=key_points,
             word_count=word_count,
             target_audience=target_audience,
+            initial_draft=initial_draft,
         )
 
     def extract_sources(self, sources: List[str], state: Optional[AgentState] = None) -> List[Dict[str, Any]]:

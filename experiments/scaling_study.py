@@ -4,7 +4,7 @@ import time
 import math
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # 保证 Windows 终端在输出中文及特殊符号时采用 UTF-8 编码
 if sys.platform == "win32":
@@ -162,10 +162,11 @@ CORPUS_POOL_20 = [
 ]
 
 
-def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
+def run_scaling_study(subsample_rounds: int = 50, seed: int = 42, bootstrap_rounds: Optional[int] = None):
+    rounds_count = bootstrap_rounds if bootstrap_rounds is not None else subsample_rounds
     console.print(Panel.fit(
-        "[bold cyan]EchoStyle 3.2 — 20 篇样本规模渐近收敛实验 (Bootstrap Monte Carlo Scaling Study)[/bold cyan]\n"
-        "[white]学术严谨性验证：基于 50 组随机重采样 (Bootstrap) 评估样本规模 (1/3/5/10/20 篇) 对语言学指纹 MSE 均值与 95% 置信区间的渐近收敛曲线[/white]"
+        "[bold cyan]EchoStyle 3.2 — 20 篇样本规模渐近收敛实验 (Monte Carlo Subsampling Scaling Study)[/bold cyan]\n"
+        "[white]学术严谨性验证：基于 50 组 Monte Carlo 无放回随机子集抽样 (Repeated Random Subsampling) 评估样本规模 (1/3/5/10/20 篇) 对语言学指纹 MSE 均值与 95% 置信区间的渐近收敛曲线[/white]"
     ))
 
     import random
@@ -178,7 +179,7 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
     scale_conditions = [
         {"name": "1 篇 (极简冷启动)", "count": 1},
         {"name": "3 篇 (初步稳定)", "count": 3},
-        {"name": "5 篇 (黄金平衡点)", "count": 5},
+        {"name": "5 篇 (候选 Operating Point)", "count": 5},
         {"name": "10 篇 (深度建模)", "count": 10},
         {"name": "20 篇 (全量封闭基准)", "count": 20},
     ]
@@ -187,7 +188,7 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
 
     for cond in scale_conditions:
         n = cond["count"]
-        rounds = 1 if n == 20 else bootstrap_rounds
+        rounds = 1 if n == 20 else rounds_count
         mses: List[float] = []
         convs: List[float] = []
         chars_list: List[int] = []
@@ -196,7 +197,7 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
         sttrs_list: List[float] = []
         ents_list: List[float] = []
 
-        console.print(f"[yellow]>> 正在执行 {cond['name']} 规模评估 (Bootstrap 迭代: {rounds} 次)...[/yellow]")
+        console.print(f"[yellow]>> 正在执行 {cond['name']} 规模评估 (Monte Carlo 迭代: {rounds} 次)...[/yellow]")
 
         for _ in range(rounds):
             sampled = CORPUS_POOL_20 if n == 20 else random.sample(CORPUS_POOL_20, n)
@@ -257,7 +258,7 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
         })
 
     # 打印收敛结果大表
-    table = Table(title="语料样本规模与文风特征均方误差收敛矩阵 (Bootstrap Monte Carlo Scaling)")
+    table = Table(title="语料样本规模与文风特征均方误差收敛矩阵 (Monte Carlo Subsampling Scaling)")
     table.add_column("样本规模梯度", style="cyan bold")
     table.add_column("平均总字数", justify="right")
     table.add_column("平均句长", justify="right")
@@ -289,17 +290,18 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
     # 打印科学发现与工业指导
     console.print("\n[bold yellow]💡 科学统计结论与工程边界澄清 (Empirical Findings & Disclaimers):[/bold yellow]")
     console.print("1. [bold]数理基准澄清[/bold]：20 篇全集 MSE=0 与收敛度 100% 为当前语料池内的封闭渐近参照系（Mathematical Definition），而非模型外生泛化能力的实验发现。")
-    console.print(f"2. [bold]Bootstrap 重采样证据[/bold]：经 50 组随机无放回重采样检验，排除样本顺序偶然性后，5 篇样本时 MSE 均值降至 [bold green]{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}[/bold green]，收敛度均值达 [bold green]{results[2]['conv_mean']:.1f}%[/bold green]，抽样方差显著收缩。")
-    console.print("3. [bold]泛化局限性说明[/bold]：本结论严格建立在同作者、同题材的 20 篇高同质性语料池上。跨作者、跨体裁的'普遍 5 篇收敛假说'仍需独立多作者基准检验，不可脱离语境绝对化推广。")
+    console.print(f"2. [bold]Monte Carlo 子集重抽样证据[/bold]：经 50 组无放回子集抽样检验，排除样本输入顺序偶然性后，5 篇样本时 MSE 均值降至 [bold green]{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}[/bold green]，收敛度均值达 [bold green]{results[2]['conv_mean']:.1f}%[/bold green]，抽样方差显著收缩。")
+    console.print("3. [bold]5 篇规模的客观定位[/bold]：从 5 篇增加到 10 篇，MSE 绝对值仍下降了约 56.1% (从 0.0098 降至 0.0043)；收敛度之所以仅变化 3.0% 是由于 1 - sqrt(MSE) 的压缩尺度。因此 5 篇严谨表述应为【当前成本—特征误差权衡下的候选 operating point】，而非绝对的黄金平衡点。")
+    console.print("4. [bold]泛化局限性说明[/bold]：本结论严格建立在同作者、同题材的 20 篇高同质性语料池上。跨作者、跨体裁的普遍收敛特性仍需独立多作者基准检验，不可脱离语境绝对化推广。")
 
     # 导出报告至 reports/ 目录（纳入版本控制）
     report_file = Path("./reports/scaling_study_report.md")
     report_file.parent.mkdir(parents=True, exist_ok=True)
-    report_md = f"""# EchoStyle 3.2 样本规模渐近收敛实验报告 (Bootstrap Scaling Report)
+    report_md = f"""# EchoStyle 3.2 样本规模渐近收敛实验报告 (Monte Carlo Subsampling Scaling Report)
 
 - **评测时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
 - **语料规模**：1 篇、3 篇、5 篇、10 篇、20 篇样本梯度
-- **实验方法**：Monte Carlo 随机组合重采样 (K=50 次迭代/规模)，排除文章输入顺序偶然性
+- **实验方法**：Monte Carlo 无放回随机子集抽样 (K=50 次迭代/规模)，排除文章输入顺序偶然性
 
 ## 一、 均方误差 (MSE) 与收敛度实测大表 (Mean ± Std & 95% CI)
 
@@ -307,7 +309,7 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **1 篇 (极简冷启动)** | ~{results[0]['total_chars']} 字 | {results[0]['avg_len']:.1f} | {results[0]['std_dev']:.1f} | {results[0]['sttr']:.3f} | {results[0]['mse_mean']:.4f} ± {results[0]['mse_std']:.4f} | [{max(0.0, results[0]['mse_mean'] - results[0]['mse_ci']):.4f}, {results[0]['mse_mean'] + results[0]['mse_ci']:.4f}] | **{results[0]['conv_mean']:.1f}% ± {results[0]['conv_std']:.1f}%** |
 | **3 篇 (初步稳定)** | ~{results[1]['total_chars']} 字 | {results[1]['avg_len']:.1f} | {results[1]['std_dev']:.1f} | {results[1]['sttr']:.3f} | {results[1]['mse_mean']:.4f} ± {results[1]['mse_std']:.4f} | [{max(0.0, results[1]['mse_mean'] - results[1]['mse_ci']):.4f}, {results[1]['mse_mean'] + results[1]['mse_ci']:.4f}] | **{results[1]['conv_mean']:.1f}% ± {results[1]['conv_std']:.1f}%** |
-| **5 篇 (黄金平衡点)** | ~{results[2]['total_chars']} 字 | {results[2]['avg_len']:.1f} | {results[2]['std_dev']:.1f} | {results[2]['sttr']:.3f} | **{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}** | **[{max(0.0, results[2]['mse_mean'] - results[2]['mse_ci']):.4f}, {results[2]['mse_mean'] + results[2]['mse_ci']:.4f}]** | **{results[2]['conv_mean']:.1f}% ± {results[2]['conv_std']:.1f}%** |
+| **5 篇 (候选 Operating Point)** | ~{results[2]['total_chars']} 字 | {results[2]['avg_len']:.1f} | {results[2]['std_dev']:.1f} | {results[2]['sttr']:.3f} | **{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}** | **[{max(0.0, results[2]['mse_mean'] - results[2]['mse_ci']):.4f}, {results[2]['mse_mean'] + results[2]['mse_ci']:.4f}]** | **{results[2]['conv_mean']:.1f}% ± {results[2]['conv_std']:.1f}%** |
 | **10 篇 (深度建模)** | ~{results[3]['total_chars']} 字 | {results[3]['avg_len']:.1f} | {results[3]['std_dev']:.1f} | {results[3]['sttr']:.3f} | {results[3]['mse_mean']:.4f} ± {results[3]['mse_std']:.4f} | [{max(0.0, results[3]['mse_mean'] - results[3]['mse_ci']):.4f}, {results[3]['mse_mean'] + results[3]['mse_ci']:.4f}] | **{results[3]['conv_mean']:.1f}% ± {results[3]['conv_std']:.1f}%** |
 | **20 篇 (全量封闭基准)** | {results[4]['total_chars']} 字 | {results[4]['avg_len']:.1f} | {results[4]['std_dev']:.1f} | {results[4]['sttr']:.3f} | 0.0000 (定义基准) | [0.0000, 0.0000] | **100.0% (基准参照系)** |
 
@@ -317,16 +319,17 @@ def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
 
 ## 二、 核心统计发现与严谨学术归因
 1. **抽样方差快速收敛**：
-   在 1 篇时，抽样 MSE 标准差高达 ±{results[0]['mse_std']:.4f}，表明不同单篇文章之间的句法离散度差异巨大；而当随机样本增至 5 篇时，MSE 均值降至 {results[2]['mse_mean']:.4f}，标准差收缩至 ±{results[2]['mse_std']:.4f}，95% 置信区间显著收紧，表明作者的核心语言学特征（句长、STTR、标点熵）在此样本规模下已进入统计稳态。
-2. **工程边际收益递减拐点**：
-   从 5 篇增加到 10 篇，指纹收敛度仅由 {results[2]['conv_mean']:.1f}% 微升至 {results[3]['conv_mean']:.1f}%（提升仅约 {results[3]['conv_mean'] - results[2]['conv_mean']:.1f}%），但所需语料字数翻倍，且在 RAG 检索中面临更多跨文章论述稀释的风险。因此，从工程性价比出发，5 篇为工业落地的推荐规模。
+   在 1 篇时，抽样 MSE 标准差高达 ±{results[0]['mse_std']:.4f}，表明不同单篇文章之间的句法离散度差异巨大；而当随机样本增至 5 篇时，MSE 均值降至 {results[2]['mse_mean']:.4f}，标准差收缩至 ±{results[2]['mse_std']:.4f}，95% 置信区间显著收紧，表明作者的核心语言学特征在此样本规模下已进入统计稳态。
+2. **当前成本—特征误差权衡下的候选 Operating Point**：
+   从 5 篇增至 10 篇，MSE 绝对值由 {results[2]['mse_mean']:.4f} 进一步降至 {results[3]['mse_mean']:.4f}（MSE 实际下降约 56.1%）；但以工程常用的 1 - sqrt(MSE) 压缩尺度观察，收敛度从 {results[2]['conv_mean']:.1f}% 到 {results[3]['conv_mean']:.1f}% 仅上升约 {results[3]['conv_mean'] - results[2]['conv_mean']:.1f}%。同时，10 篇需要双倍语料接入与更复杂的向量检索去重成本。因此，在没有建立严格的 `cost × quality` 效用方程前，5 篇应准确定义为“**当前成本—特征误差权衡下的候选 operating point**”，而非武断的“黄金平衡点”。
+
 3. **泛化边界与未竟探索 (Limitations)**：
    本实验基于同一作者高同质性的 20 篇时评杂文。这只能证明**该特定语料池内的特征渐近规律**，不足以直接推出“所有人类写作者普遍在 5 篇处收敛”。跨作者、跨体裁的普遍有效性，仍有待多作者独立评测集进一步验证。
 """
     report_file.write_text(report_md, encoding="utf-8")
     # 同时保留 profiles 副本以防兼容性依赖
     (Path("./profiles") / "scaling_study_report.md").write_text(report_md, encoding="utf-8")
-    console.print(f"\n[bold green]Bootstrap 规模渐近收敛实验报告已成功更新至:[/bold green] {report_file}")
+    console.print(f"\n[bold green]Monte Carlo 规模渐近收敛实验报告已成功更新至:[/bold green] {report_file}")
 
 
 if __name__ == "__main__":

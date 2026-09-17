@@ -70,3 +70,45 @@ def test_dense_search_with_embeddings():
             non_existent_hybrid = store.hybrid_search("技术与架构演进", top_k=2, type_filter="non_existent")
             assert non_existent_hybrid == []
 
+
+def test_fail_closed_on_missing_embeddings():
+    """验证 P0 缺陷修复：Dense RAG 在 Embedding 缺失或失败时 Fail-Closed，严禁静默退化"""
+    import pytest
+    from unittest.mock import patch
+    from src.core.exceptions import EmbeddingUnavailableError
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "fail_closed_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        # 候选切片没有向量
+        store.chunks = [
+            {"id": "doc_1", "content": "没有向量切片A", "embedding": None, "metadata": {"type": "argument"}},
+            {"id": "doc_2", "content": "没有向量切片B", "embedding": None, "metadata": {"type": "quote"}},
+        ]
+
+        # 1. dense_search 在无向量时必须坚决抛出异常阻断，绝不能静默返回 candidates[:top_k]
+        with patch.object(store.model_provider, "get_embeddings", return_value=None):
+            with pytest.raises(EmbeddingUnavailableError) as exc:
+                store.dense_search("测试查询", top_k=2)
+            assert "Dense 语义检索不可用" in str(exc.value)
+
+        # 2. 即使 query 获得了向量，但库中切片均无向量，dense_search 仍必须 fail-closed
+        with patch.object(store.model_provider, "get_embeddings", return_value=[[0.1, 0.2]]):
+            with pytest.raises(EmbeddingUnavailableError) as exc:
+                store.dense_search("测试查询", top_k=2)
+            assert "Fail-Closed" in str(exc.value)
+
+        # 3. hybrid_search 在 require_dense=True 时同样必须 fail-closed
+        with patch.object(store.model_provider, "get_embeddings", return_value=None):
+            with pytest.raises(EmbeddingUnavailableError) as exc:
+                store.hybrid_search("测试查询", top_k=2, require_dense=True)
+            assert "Hybrid 检索 Dense 通道不可用" in str(exc.value)
+
+        # 4. hybrid_search 在生产宽松模式下 (require_dense=False) 仍允许降级为单通道稀疏排序
+        with patch.object(store.model_provider, "get_embeddings", return_value=None):
+            results = store.hybrid_search("向量", top_k=2, require_dense=False)
+            assert len(results) > 0
+            assert "rrf_score" in results[0]
+
+

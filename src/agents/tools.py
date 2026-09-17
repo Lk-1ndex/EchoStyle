@@ -27,7 +27,7 @@ class Tool:
 class ToolRegistry:
     """
     统一工具注册表 (Tool Registry)：
-    提供 Agent 自主感知、按需调用的工具容器。
+    提供工作流受控编排、按需调用的工具容器。
     """
     def __init__(self):
         self._tools: Dict[str, Tool] = {}

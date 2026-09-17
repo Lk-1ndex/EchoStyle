@@ -23,3 +23,9 @@ class CheckpointNotFoundError(EchoStyleException):
 class ModelProviderError(EchoStyleException):
     """模型层重试与降级后仍失败的异常"""
     pass
+
+
+class EmbeddingUnavailableError(EchoStyleException):
+    """向量服务不可用异常（Fail-Closed 严控检索语义纯度，拒绝静默退化）"""
+    pass
+

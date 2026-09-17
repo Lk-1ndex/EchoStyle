@@ -52,8 +52,8 @@ def main():
     p_bench.add_argument("--blind", action="store_true", help="运行规范化双盲评测 (Blind Pairwise Benchmark with 95%% Wilson CI)")
     p_bench.add_argument("--failure", action="store_true", help="运行失败案例与系统边界深度剖析 (Failure Modes & Case Studies)")
     p_bench.add_argument("--simulate", action="store_true", help="离线模拟模式 (无真实 API Key 时用于测试演示)")
-    p_bench.add_argument("--topics", type=int, default=3, help="消融实验测试题目数量 (1-5, 默认 3)")
-    p_bench.add_argument("--repeat", type=int, default=1, help="每个题目重复轮次 (默认 1)")
+    p_bench.add_argument("--topics", type=int, default=5, help="消融实验测试题目数量 (1-5, 默认 5)")
+    p_bench.add_argument("--repeat", type=int, default=5, help="每个题目重复轮次 (默认 5)")
 
     args = parser.parse_args()
     config = load_config()

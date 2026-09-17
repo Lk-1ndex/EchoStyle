@@ -80,6 +80,58 @@ def test_coordinator_workflow_integration():
 test_coordinator_dynamic_run_e2e = test_coordinator_workflow_integration
 
 
+def test_condition_d_strict_single_variable_e2e():
+    """验证消融实验 Condition D 严格单变量实验机制：复用 C2 稿件与 memory_snapshot，唯一自变量为 Critic 反思重写"""
+    config = AppConfig()
+    coordinator = CoordinatorAgent(config)
+
+    profile = DeepStyleProfile(
+        name="消融测试文风",
+        qualitative=StyleProfile(
+            name="消融",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="痛点", body_progression="递进", ending_style="金句"),
+            anti_patterns=AntiPatterns()
+        )
+    )
+
+    # 1. 模拟 C2 生成产物
+    state_c2 = AgentState(topic="职场表演艺术", key_points="交付结果优先", word_count=500)
+    state_c2.memory_snapshot = [{"content": "切片1：不要表演，要结果"}, {"content": "切片2：金句：说白了都是借口"}]
+    art_c2 = "说白了，很多人在职场中只是表演型工作，而不是交付真实结果。"
+
+    # 2. 模拟 Condition D 严控单变量：复用 state_c2.memory_snapshot 与 art_c2
+    state_d = AgentState(topic="职场表演艺术", key_points="交付结果优先", word_count=500)
+    state_d.memory_snapshot = state_c2.memory_snapshot
+
+    # 模拟 Critic 判定首轮需反思 REVISE，第二轮通过 ACCEPT
+    critic_report_1 = '{"style_fidelity": 72, "logic_depth": 70, "human_preference": 75, "radar": {"tone": 72, "cadence": 70, "lexicon": 72, "discourse": 70, "anti_ai": 90}, "detected_cliches": ["毋庸讳言"], "critique_feedback": "请删除毋庸讳言"}'
+    critic_report_2 = '{"style_fidelity": 88, "logic_depth": 85, "human_preference": 88, "radar": {"tone": 88, "cadence": 85, "lexicon": 88, "discourse": 85, "anti_ai": 100}, "detected_cliches": [], "critique_feedback": "修改到位，通过"}'
+    rewritten_draft = "说白了，真正的职场人靠交付结果说话，摒弃虚妄表演。"
+
+    with patch.object(coordinator.critic_agent.judge.model_provider, "chat_completion", side_effect=[critic_report_1, critic_report_2]), \
+         patch.object(coordinator.writer_agent.model_provider, "chat_completion", return_value=rewritten_draft):
+
+        art_d, report_d, final_st = coordinator.run(
+            state=state_d,
+            profile=profile,
+            initial_draft=art_c2,
+        )
+
+        assert final_st.current_status == AgentStatus.COMPLETED
+        assert final_st.retry_count == 1
+        assert art_d == rewritten_draft
+        assert report_d.overall_score >= 80.0
+        # 验证 memory_snapshot 始终为 C2 提供的同一个快照
+        assert final_st.memory_snapshot == state_c2.memory_snapshot
+        # 验证 draft_chain 中首个版本来自 initial_draft
+        assert final_st.draft_chain[0].content == art_c2
+        assert final_st.draft_chain[1].content == rewritten_draft
+
+
+import os
 import pytest
 import tempfile
 from pathlib import Path
@@ -89,13 +141,12 @@ from src.analyzer.stylometrics import StylometricsAnalyzer
 from src.evaluation.composite_eval import CompositeEvaluator
 
 
-@pytest.mark.integration
-def test_coordinator_real_pipeline_smoke():
+def test_component_pipeline_smoke():
     """
-    真实组件端到端 Smoke Test (标记为 @pytest.mark.integration)：
-    不 patch 内部组件，贯通 StylometricsAnalyzer -> 真实 VectorStore 切片入库 -> 
+    真实组件端到端 Smoke Test (无网络隔离依赖)：
+    贯通 StylometricsAnalyzer -> 真实 VectorStore 切片入库 -> 
     Dense 语义与 Style-Aware 定向召回 -> Task-Aware Token Budget 装配 -> CompositeEvaluator 评测。
-    若配置了真实 API Key，则进一步执行真实 LLM 对话检验；未配置时完整验证除外连网络外的全部真实数据通路。
+    使用 Mock 向量满足 Fail-Closed 校验，验证除外连网络外的全部真实内部数据通路。
     """
     sample_text = """# 别把信息搬运当成深度思考
 
@@ -110,20 +161,22 @@ def test_coordinator_real_pipeline_smoke():
         vstore = VectorStore(storage_path=str(store_path))
         mem_mgr = MemoryManager(vector_store=vstore)
 
-        # 1. 真实入库与特征建模
-        added = mem_mgr.ingest_article("样例样文", sample_text)
-        assert added >= 2
+        # 1. 真实入库与特征建模 (提供 mock 向量以满足 fail-closed 严选约束)
+        with patch.object(vstore.model_provider, "get_embeddings", return_value=[[0.1] * 128, [0.2] * 128, [0.3] * 128]):
+            added = mem_mgr.ingest_article("样例样文", sample_text)
+            assert added >= 2
 
         metrics = StylometricsAnalyzer.analyze(sample_text)
         assert metrics.total_sentences >= 2
         assert metrics.avg_sentence_length > 0
 
         # 2. 真实纯 Dense 召回与 Style-Aware 召回校验
-        dense_shots = mem_mgr.retrieve_dense("深度思考与信息搬运", top_k=2)
-        assert len(dense_shots) > 0
+        with patch.object(vstore.model_provider, "get_embeddings", return_value=[[0.1] * 128]):
+            dense_shots = mem_mgr.retrieve_dense("深度思考与信息搬运", top_k=2)
+            assert len(dense_shots) > 0
 
-        few_shots = mem_mgr.retrieve_dynamic_few_shots("深度思考与信息搬运", top_k=3)
-        assert len(few_shots) > 0
+            few_shots = mem_mgr.retrieve_dynamic_few_shots("深度思考与信息搬运", top_k=3)
+            assert len(few_shots) > 0
 
         # 3. 真实 Token Budget 启发式预算装配链路
         config = AppConfig()
@@ -160,3 +213,31 @@ def test_coordinator_real_pipeline_smoke():
         )
         assert 0.0 <= eval_res.echo_score <= 100.0
         assert eval_res.rhythm_match > 0.0
+
+
+@pytest.mark.integration
+def test_coordinator_real_network_integration():
+    """
+    真正走真实网络的端到端在线集成测试：
+    在存在环境变量 ECHOSTYLE_INTEGRATION_API_KEY 时，向真实在线 API 发送请求并驱动 CoordinatorAgent.run() 全链路；
+    若未提供该环境变量，则自动 pytest.skip() 跳过。
+    """
+    api_key = os.getenv("ECHOSTYLE_INTEGRATION_API_KEY")
+    if not api_key:
+        pytest.skip("未配置 ECHOSTYLE_INTEGRATION_API_KEY，跳过真实在线网络与大模型集成测试")
+
+    config = AppConfig()
+    config.llm.api_key = api_key
+    base_url = os.getenv("ECHOSTYLE_INTEGRATION_BASE_URL", config.llm.base_url)
+    config.llm.base_url = base_url
+    coordinator = CoordinatorAgent(config)
+
+    state = AgentState(
+        topic="真实在线网络测试主题：数字时代独立思考的价值",
+        key_points="拒绝从众；保持真实；敢于发声",
+        word_count=500,
+    )
+    draft, report, final_state = coordinator.run(state=state)
+    assert len(draft) > 0
+    assert final_state.current_status in [AgentStatus.COMPLETED, AgentStatus.COMPLETED_WITH_WARNING]
+

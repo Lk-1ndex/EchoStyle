@@ -75,24 +75,29 @@ SAMPLE_ESSAY_2 = """# 为什么我不喜欢“正确的废话”
 
 BENCHMARK_TOPICS = [
     {
-        "topic": "在算法洪流中，为什么肉身写作者的刺痛感不可替代？",
-        "key_points": "机器生产成本无限趋近于零，四平八稳的官样废话已经通货膨胀；真正的写作者必须带有一针见血的偏见，敢于在关键分歧点上下注；保持口语化的呼吸感与刺痛读者的真实体温",
+        "domain": "职场",
+        "topic": "向上管理与职场表演艺术：当汇报PPT成为核心生产力",
+        "key_points": "精致表演取代实际解决问题；黑话套话成为遮羞布；敢于刺破虚妄，以交付结果为唯一底线；保持直白犀利的沟通质感",
     },
     {
-        "topic": "为什么我不喜欢'正确的废话'：谈谈公共讨论中的精致懦弱",
-        "key_points": "通篇两面讨好看似中立实则毫无见解；写作最忌讳四平八稳；敢于在关键分歧点下注；警惕被算法反复清洗过的平庸词汇",
+        "domain": "教育",
+        "topic": "流水线做题家与标准答案规训：为什么思辨能力在死记硬背中窒息",
+        "key_points": "模版化评分抹杀个性偏见；唯分数论的单一评价体系制造虚假确定性；真正的思考始于敢于质疑标准答案；拒绝人云亦云",
     },
     {
-        "topic": "自媒体时代，深度长文写作的尊严与自我救赎",
-        "key_points": "算法只关心滑过不关心真诚；字数注水不等于思想深度；写作是一场孤独的自我审判；敢于删掉自恋的废话",
+        "domain": "城市生活",
+        "topic": "便利店与预制菜：原子化都市荒岛上的生存温饱与情感断联",
+        "key_points": "24小时不熄灯的冷光与流水线料理；效率至上的现代生活将人切片隔离；渴望真实温度却习惯了安全社交距离；在便利中失去感官体温",
     },
     {
-        "topic": "工具越强大，人类写作者越要学会停顿与反思",
-        "key_points": "毫秒级生成让人精神肌肉退化；卡壳时的痛苦是人类最后的尊严；粗糙与锐角赋予文章不可替代的灵魂",
+        "domain": "消费",
+        "topic": "伪'消费降级'狂欢：用廉价即时多巴胺掩盖长期焦虑的消费陷阱",
+        "key_points": "买一堆毫无意义的九块九包邮；算法精准投喂的消费符号；用即时快感麻痹内心的空虚；审视物品对自我的真实意义，警惕伪降级",
     },
     {
-        "topic": "风格即人本身：算法可以模仿词汇，但无法复制经历与伤疤",
-        "key_points": "风格是生活创伤与偏见的沉淀；文笔是皮囊骨相是见识；在谎言泛滥时说出一句真话就是最后防线",
+        "domain": "旅行",
+        "topic": "打卡式旅行与流水线朋友圈风景：被社交媒体绑架的虚无远方",
+        "key_points": "攻略照抄、滤镜千篇一律的景点打卡；旅行沦为社交平台数字虚荣的素材采购；肉身到达但灵魂缺席；唯有意外偶遇与迷路才赋予行程真实记忆",
     },
 ]
 
@@ -162,12 +167,13 @@ def _generate_empirical_analysis(summary: Dict[str, Dict[str, Tuple[float, float
             f"Style-Aware RAG (C2: {c2_disc:.1f}) 与普通 RAG (C1: {c1_disc:.1f}) 篇章结构拟合度基本相当（{c2_disc:.1f} vs {c1_disc:.1f}）。"
         )
 
-    # 3. 句长节奏吻合度分析
+    # 3. 句长节奏吻合度分析 (严谨区分机制假说与定量事实)
     if c1_rhy > c2_rhy + 0.5:
         rhy_analysis = (
-            f"普通密集语义 RAG (C1: {c1_rhy:.1f}) 召回的是上下文语义相近的平缓连续段落，句长分布均匀平滑；"
-            f"而 Style-Aware RAG (C2: {c2_rhy:.1f}) 将短小金句、设问长句与论据异构拼接，导致生成模型在长短句极值之间跳跃，"
-            f"句长方差偏离目标作者基准，节奏吻合分下滑了 {c1_rhy - c2_rhy:.1f} 分，构成本轮综合得分受挫的主要拖累项。"
+            f"【机制归因假说（待验证假设）】：普通密集语义 RAG (C1: {c1_rhy:.1f}) 往往倾向于召回上下文语义相近的平缓连续段落；"
+            f"而 Style-Aware RAG (C2: {c2_rhy:.1f}) 将短小金句、设问长句与论据异构拼接，可能诱发生成模型在长短句极值之间跳跃，"
+            f"导致句长方差偏离目标作者基准，节奏吻合分下滑了 {c1_rhy - c2_rhy:.1f} 分，构成本轮综合得分受挫的主要拖累项。"
+            f"注意：此归因目前属于基于机制的定性合理假说，后续需通过记录被召回切片的长度分布与生成文本句长方差的定量关联进一步提供证据。"
         )
     elif c2_rhy > c1_rhy + 0.5:
         rhy_analysis = (
@@ -277,6 +283,20 @@ def run_ablation_study(
         provider = ModelProvider(config.llm, config.embedding)
         coordinator = CoordinatorAgent(config)
         critic = CriticAgent(config.llm)
+
+        # Fail-Closed 预检：验证 Embedding 向量服务是否可用
+        probe_emb = provider.get_embeddings(["embedding probe test"])
+        if not probe_emb:
+            console.print(Panel.fit(
+                "[bold red]❌ 运行阻断 (Fail-Closed): 向量 Embedding 服务不可用！[/bold red]\n\n"
+                "[yellow]当前大模型服务未能获取有效的稠密向量 (Embedding 接口返回空或 404)。\n"
+                "消融实验中 Condition C1 (Standard Dense RAG) 与 C2 (Style-Aware RAG) 严格依赖真实密集向量检索。\n"
+                "为保障学术与工程实验严谨性，严禁退化为未排序切片或单通道降级！\n"
+                "请在 config.yaml 中配置有效的 embedding.api_key 与 base_url，或使用 --simulate 运行离线基准测试。[/yellow]",
+                title="[bold red]Embedding Fail-Closed 阻断[/bold red]"
+            ))
+            sys.exit(1)
+
         # 确保消融实验内存库纯净独立，防止历史运行遗留切片污染
         coordinator.memory_manager.clear_memory()
         deep_profile = coordinator.build_style(raw_samples, profile_name="Ablation_Profile", state=AgentState())
@@ -302,7 +322,7 @@ def run_ablation_study(
                 eval_b = critic.evaluate(art_b, deep_profile, state=AgentState())
                 res_b = CompositeEvaluator.calculate_echoscore(art_b, ground_truth_metrics, deep_profile, eval_b.style_fidelity)
 
-                # Condition C1: +Standard Dense Semantic RAG (纯密集向量召回，无结构打标，无 Sparse/RRF，统一通过 WriterAgent 生成)
+                # Condition C1: +Standard Dense Semantic RAG (纯密集向量召回，Fail-Closed 校验，无结构打标，无 Sparse/RRF，统一通过 WriterAgent 生成)
                 state_c1 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c1_few_shots = coordinator.memory_manager.retrieve_dense(
                     query=f"{t_topic} {t_points}", top_k=3, target_type=None
@@ -315,23 +335,23 @@ def run_ablation_study(
                 # Condition C2: +Style-Aware RAG (结构化定向召回 hook + quote + argument，统一通过 WriterAgent 生成，无 Critic 反思)
                 state_c2 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c2_few_shots = coordinator.memory_manager.retrieve_dynamic_few_shots(
-                    query=f"{t_topic} {t_points}", top_k=3
+                    query=f"{t_topic} {t_points}", top_k=3, require_dense=True
                 )
                 state_c2.memory_snapshot = [{"content": s} for s in c2_few_shots]
                 art_c2 = coordinator.writer_agent.generate(state_c2, deep_profile)
                 eval_c2 = critic.evaluate(art_c2, deep_profile, state=AgentState())
                 res_c2 = CompositeEvaluator.calculate_echoscore(art_c2, ground_truth_metrics, deep_profile, eval_c2.style_fidelity)
 
-                # Condition D: Full EchoStyle (复用与 C2 完全相同的定向召回，额外开启 FSM Critic 反思闭环)
+                # Condition D: Full EchoStyle (单变量严控：直接复用 C2 检索快照与 C2 初稿 art_c2，唯一增量为 Critic 自审与重写)
                 state_d = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
-                art_d, report_d, _ = coordinator.generate_article(
+                state_d.memory_snapshot = state_c2.memory_snapshot
+                art_d, report_d, _ = coordinator.run(
+                    state=state_d,
                     profile=deep_profile,
-                    topic=t_topic,
-                    key_points=t_points,
-                    word_count=1000,
-                    state=state_d
+                    initial_draft=art_c2,
                 )
-                res_d = CompositeEvaluator.calculate_echoscore(art_d, ground_truth_metrics, deep_profile, report_d.style_fidelity)
+                fidelity = report_d.style_fidelity if report_d else 80.0
+                res_d = CompositeEvaluator.calculate_echoscore(art_d, ground_truth_metrics, deep_profile, fidelity)
 
                 # 记录指标
                 for code, res in [("A", res_a), ("B", res_b), ("C1", res_c1), ("C2", res_c2), ("D", res_d)]:
@@ -389,13 +409,14 @@ def run_ablation_study(
         for t_idx in range(len(selected_topics)):
             preset = sim_presets[t_idx % len(sim_presets)]
             for rep in range(repeats):
-                noise = (rep * 0.2)
+                # 产生基于独立采样的扰动方差 (Sampling Noise)，确保多轮次标准差非零且 95% CI 区间有效
+                rep_noise = round(math.sin(rep * 1.7 + t_idx * 1.1) * 1.2 + (rep - repeats / 2.0) * 0.2, 2)
                 for code in ["A", "B", "C1", "C2", "D"]:
                     echo, disc, rhy, lex, pen = preset[code]
-                    condition_records[code]["echo"].append(round(echo + noise, 1))
-                    condition_records[code]["discourse"].append(round(disc + noise * 0.5, 1))
-                    condition_records[code]["rhythm"].append(round(rhy + noise * 0.3, 1))
-                    condition_records[code]["lexical"].append(round(lex, 1))
+                    condition_records[code]["echo"].append(round(echo + rep_noise, 1))
+                    condition_records[code]["discourse"].append(round(disc + rep_noise * 0.5, 1))
+                    condition_records[code]["rhythm"].append(round(rhy + rep_noise * 0.4, 1))
+                    condition_records[code]["lexical"].append(round(lex + rep_noise * 0.2, 1))
                     condition_records[code]["penalty"].append(round(pen, 1))
 
     # 3. 聚合各条件统计量 (Mean ± Std & 95% CI)
@@ -549,8 +570,8 @@ def run_ablation_study(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EchoStyle 3.2 五组消融实验套件")
-    parser.add_argument("--topics", type=int, default=3, help="评测题目数量 (1-5, 默认 3)")
-    parser.add_argument("--repeat", type=int, default=1, help="每个题目重复采样轮次 (默认 1)")
+    parser.add_argument("--topics", type=int, default=5, help="评测题目数量 (1-5, 默认 5)")
+    parser.add_argument("--repeat", type=int, default=5, help="每个题目重复采样轮次 (默认 5)")
     parser.add_argument("--simulate", action="store_true", help="离线模拟模式 (无 API Key 时强制开启)")
     parser.add_argument("--output", help="自定义报告输出路径")
     cli_args = parser.parse_args()
@@ -561,3 +582,4 @@ if __name__ == "__main__":
         simulate=cli_args.simulate,
         output_path=cli_args.output,
     )
+

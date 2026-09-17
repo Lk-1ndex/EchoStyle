@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from src.core.config import EmbeddingConfig, LLMConfig
+from src.core.exceptions import EmbeddingUnavailableError
 from src.core.model_provider import ModelProvider
 
 
@@ -56,6 +57,7 @@ class VectorStore:
         纯密集向量语义检索 (Dense Semantic Search)：
         仅依据稠密向量余弦相似度排序，不执行稀疏词频 (Sparse/BM25) 统计，不经过 RRF 倒数排名融合。
         用于消融实验 Standard Semantic RAG (Condition C1) 严格控制变量。
+        Fail-Closed 机制：若无法获取 query 向量或候选切片缺少 embedding 向量，直接抛出 EmbeddingUnavailableError，严禁静默退化！
         """
         if not self.chunks:
             return []
@@ -71,31 +73,38 @@ class VectorStore:
 
         query_embs = self.model_provider.get_embeddings([query])
         query_dense = query_embs[0] if query_embs else None
+        has_chunk_embs = any(c.get("embedding") is not None for c in candidates)
 
-        if query_dense and any(c.get("embedding") is not None for c in candidates):
-            dense_scores = []
-            for c in candidates:
-                emb = c.get("embedding")
-                score = self._cosine_similarity(query_dense, emb) if emb else 0.0
-                dense_scores.append((score, c))
-            dense_scores.sort(key=lambda x: x[0], reverse=True)
-            results = []
-            for score, c in dense_scores[:top_k]:
-                item = dict(c)
-                item["dense_score"] = round(score, 6)
-                results.append(item)
-            return results
-        else:
-            return candidates[:top_k]
+        if not query_dense or not has_chunk_embs:
+            raise EmbeddingUnavailableError(
+                "Dense 语义检索不可用: 无法获取 query 向量或候选切片缺少 embedding 向量。"
+                "基准消融实验场景下严格禁止静默退化为未排序切片 (Fail-Closed)！"
+            )
+
+        dense_scores = []
+        for c in candidates:
+            emb = c.get("embedding")
+            score = self._cosine_similarity(query_dense, emb) if emb else 0.0
+            dense_scores.append((score, c))
+        dense_scores.sort(key=lambda x: x[0], reverse=True)
+        results = []
+        for score, c in dense_scores[:top_k]:
+            item = dict(c)
+            item["dense_score"] = round(score, 6)
+            results.append(item)
+        return results
 
     def hybrid_search(
         self,
         query: str,
         top_k: int = 3,
         type_filter: Optional[str] = None,
+        require_dense: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         标准 RRF (Reciprocal Rank Fusion) 倒数排名融合检索
+        :param require_dense: 若为 True (严格基准对照模式)，当 Dense 向量不可用时直接抛出 EmbeddingUnavailableError，
+                              拒绝单通道降级污染实验条件；生产普通模式下为 False，允许优雅降级为单通道稀疏排序。
         """
         if not self.chunks:
             return []
@@ -113,9 +122,16 @@ class VectorStore:
         # 1. 密集向量检索通道 (Dense Retrieval)
         query_embs = self.model_provider.get_embeddings([query])
         query_dense = query_embs[0] if query_embs else None
+        has_chunk_embs = any(c.get("embedding") is not None for c in candidates)
+
+        if require_dense and (not query_dense or not has_chunk_embs):
+            raise EmbeddingUnavailableError(
+                "Hybrid 检索 Dense 通道不可用: 无法获取 query 向量或候选切片缺少 embedding 向量。"
+                "严格基准对照模式下拒绝退化为纯稀疏排序 (Fail-Closed)！"
+            )
 
         dense_ranks: Dict[str, int] = {}
-        if query_dense and any(c.get("embedding") is not None for c in candidates):
+        if query_dense and has_chunk_embs:
             dense_scores = []
             for c in candidates:
                 emb = c.get("embedding")
@@ -125,6 +141,7 @@ class VectorStore:
             dense_scores.sort(key=lambda x: x[0], reverse=True)
             for rank_idx, (_, cid) in enumerate(dense_scores, start=1):
                 dense_ranks[cid] = rank_idx
+
 
         # 2. 稀疏词汇检索通道 (Sparse Retrieval - Token Overlap / BM25 变体)
         query_tokens = self._tokenize(query)

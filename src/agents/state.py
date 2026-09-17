@@ -45,6 +45,19 @@ class DraftVersion(BaseModel):
     critic_feedback: str = ""
 
 
+class DraftCheckpoint(BaseModel):
+    """草稿与评测内容快照 (DraftCheckpoint，重试计数仅作审计留存，不属于工作流控制回滚范畴)"""
+    status: AgentStatus
+    current_draft: str
+    draft_chain: List[DraftVersion] = Field(default_factory=list)
+    latest_report: Optional[EvaluationReport] = None
+    timestamp: float = Field(default_factory=time.time)
+    retry_count: int = 0
+
+    def __getitem__(self, item: str):
+        return getattr(self, item)
+
+
 class AgentState(BaseModel):
     """
     真正具备有限状态机 (FSM) 约束与快照回滚 (Rollback) 能力的 Agent 状态容器
@@ -73,7 +86,7 @@ class AgentState(BaseModel):
     error_history: List[str] = Field(default_factory=list)
 
     # 状态快照仓库 (Checkpoints)
-    checkpoints: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    checkpoints: Dict[str, DraftCheckpoint] = Field(default_factory=dict)
 
     def transition_to(self, new_status: AgentStatus, log_msg: str):
         """
@@ -96,31 +109,42 @@ class AgentState(BaseModel):
         self.execution_logs.append(entry)
         print(entry)
 
-    def create_checkpoint(self, checkpoint_name: str):
-        """创建当前完整状态快照"""
-        self.checkpoints[checkpoint_name] = {
-            "status": self.current_status,
-            "current_draft": self.current_draft,
-            "draft_chain": copy.deepcopy(self.draft_chain),
-            "latest_report": copy.deepcopy(self.latest_report),
-            "retry_count": self.retry_count,
-            "timestamp": time.time(),
-        }
-        self.execution_logs.append(f"[CHECKPOINT] 已保存检查点: '{checkpoint_name}' (稿件字数: {len(self.current_draft)})")
+    def create_checkpoint(self, checkpoint_name: str) -> DraftCheckpoint:
+        """创建当前草稿内容与评测状态快照 (DraftCheckpoint)"""
+        ckpt = DraftCheckpoint(
+            status=self.current_status,
+            current_draft=self.current_draft,
+            draft_chain=copy.deepcopy(self.draft_chain),
+            latest_report=copy.deepcopy(self.latest_report),
+            retry_count=self.retry_count,
+            timestamp=time.time(),
+        )
+        self.checkpoints[checkpoint_name] = ckpt
+        self.execution_logs.append(f"[CHECKPOINT] 已保存草稿检查点: '{checkpoint_name}' (稿件字数: {len(self.current_draft)})")
+        return ckpt
 
-    def rollback_to(self, checkpoint_name: str) -> bool:
-        """从检查点回滚恢复状态"""
+    def create_draft_checkpoint(self, checkpoint_name: str) -> DraftCheckpoint:
+        """创建草稿检查点快照的显式语义方法"""
+        return self.create_checkpoint(checkpoint_name)
+
+    def rollback_to(self, checkpoint_name: str, restore_retry_count: bool = False) -> bool:
+        """
+        从草稿检查点回滚恢复状态。
+        注意：重试计数 (retry_count) 属于 workflow control state，默认绝不回滚 (restore_retry_count=False)，
+        避免 REJECT -> rollback(pre_draft) 导致重试计数清零陷入无限循环。
+        """
         if checkpoint_name not in self.checkpoints:
             raise CheckpointNotFoundError(f"未找到检查点快照: '{checkpoint_name}'")
 
         ckpt = self.checkpoints[checkpoint_name]
-        self.current_status = ckpt["status"]
-        self.current_draft = ckpt["current_draft"]
-        self.draft_chain = copy.deepcopy(ckpt["draft_chain"])
-        self.latest_report = copy.deepcopy(ckpt["latest_report"])
-        self.retry_count = ckpt["retry_count"]
+        self.current_status = ckpt.status if hasattr(ckpt, "status") else ckpt["status"]
+        self.current_draft = ckpt.current_draft if hasattr(ckpt, "current_draft") else ckpt["current_draft"]
+        self.draft_chain = copy.deepcopy(ckpt.draft_chain if hasattr(ckpt, "draft_chain") else ckpt["draft_chain"])
+        self.latest_report = copy.deepcopy(ckpt.latest_report if hasattr(ckpt, "latest_report") else ckpt["latest_report"])
+        if restore_retry_count:
+            self.retry_count = ckpt.retry_count if hasattr(ckpt, "retry_count") else ckpt["retry_count"]
 
-        entry = f"[ROLLBACK SUCCESS] 状态成功回滚至检查点: '{checkpoint_name}'，已恢复稿件版本与评估分"
+        entry = f"[ROLLBACK SUCCESS] 状态成功回滚至检查点: '{checkpoint_name}'，已恢复稿件版本与评估分 (重试计数: {self.retry_count})"
         self.execution_logs.append(entry)
         print(entry)
         return True
