@@ -16,6 +16,7 @@ class AgentStatus(str, Enum):
     CRITIQUING = "CRITIQUING"     # 质量严审与 EchoEval 评测
     REFLECTING = "REFLECTING"     # 反思自查与针对性重构
     COMPLETED = "COMPLETED"       # 终审通过，任务圆满达成
+    COMPLETED_WITH_WARNING = "COMPLETED_WITH_WARNING"  # 重试已满但未通过ACCEPT阈值，降级输出最佳版本
     FAILED = "FAILED"             # 任务失败或超重试上限
 
 
@@ -25,9 +26,10 @@ ALLOWED_TRANSITIONS: Dict[AgentStatus, List[AgentStatus]] = {
     AgentStatus.PARSING: [AgentStatus.MODELING, AgentStatus.DRAFTING, AgentStatus.FAILED],
     AgentStatus.MODELING: [AgentStatus.DRAFTING, AgentStatus.FAILED],
     AgentStatus.DRAFTING: [AgentStatus.CRITIQUING, AgentStatus.FAILED],
-    AgentStatus.CRITIQUING: [AgentStatus.REFLECTING, AgentStatus.COMPLETED, AgentStatus.FAILED],
+    AgentStatus.CRITIQUING: [AgentStatus.REFLECTING, AgentStatus.COMPLETED, AgentStatus.COMPLETED_WITH_WARNING, AgentStatus.FAILED],
     AgentStatus.REFLECTING: [AgentStatus.DRAFTING, AgentStatus.CRITIQUING, AgentStatus.FAILED],
     AgentStatus.COMPLETED: [AgentStatus.IDLE],  # 允许重置任务
+    AgentStatus.COMPLETED_WITH_WARNING: [AgentStatus.IDLE],  # 允许重置任务
     AgentStatus.FAILED: [AgentStatus.IDLE],     # 允许失败后重置
 }
 
@@ -54,8 +56,8 @@ class AgentState(BaseModel):
     word_count: int = 1500
     target_audience: str = "大众读者"
 
-    # 记忆与上下文快照
-    memory_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
+    # 记忆与上下文快照 (None 表示未初始化，空列表 [] 表示显式禁用检索)
+    memory_snapshot: Optional[List[Dict[str, Any]]] = Field(default=None)
 
     # 版本演进链与当前稿件
     draft_chain: List[DraftVersion] = Field(default_factory=list)

@@ -44,14 +44,49 @@ class MemoryManager:
         )
         return [r["content"] for r in results]
 
+    def retrieve_dense(
+        self,
+        query: str,
+        top_k: int = 3,
+        target_type: Optional[str] = None,
+    ) -> List[str]:
+        """
+        纯密集向量语义检索 (Standard Semantic RAG):
+        不使用词频匹配，不经过 RRF 倒数排名融合，用于消融对照组严格控制变量。
+        """
+        results = self.vector_store.dense_search(
+            query=query,
+            top_k=top_k,
+            type_filter=target_type
+        )
+        return [r["content"] for r in results]
+
     def retrieve_dynamic_few_shots(
         self,
         query: str,
         top_k: int = 3,
         type_filter: Optional[str] = None,
     ) -> List[str]:
-        """组合多风格类型的均衡 Few-shot 召回"""
-        return self.retrieve_style_aware(query, target_type=type_filter, top_k=top_k)
+        """
+        风格感知定向篇章结构组合召回 (Style-Aware Few-shot Retrieval)：
+        若指定 type_filter 或 top_k < 3，执行指定类型或单条语义召回；
+        若未指定 type_filter 且 top_k >= 3，定向均衡覆盖 hook (开篇痛点) + quote (警策金句) + argument (核心论据)，
+        确保 WriterAgent 生成链路 (Condition D) 与消融实验 Condition C2 检索逻辑完全一致。
+        """
+        if type_filter or top_k < 3:
+            return self.retrieve_style_aware(query, target_type=type_filter, top_k=top_k)
+
+        hooks = self.retrieve_style_aware(query, target_type="hook", top_k=1)
+        quotes = self.retrieve_style_aware(query, target_type="quote", top_k=1)
+        args_s = self.retrieve_style_aware(query, target_type="argument", top_k=1)
+        combined = hooks + quotes + args_s
+
+        if len(combined) < top_k:
+            fallback = self.vector_store.hybrid_search(query, top_k=top_k)
+            for f in fallback:
+                if f["content"] not in combined and len(combined) < top_k:
+                    combined.append(f["content"])
+        return combined[:top_k]
 
     def get_memory_stats(self) -> Dict[str, Any]:
         all_chunks = self.vector_store.get_all()

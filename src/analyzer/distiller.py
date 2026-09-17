@@ -79,5 +79,14 @@ class StyleDistiller:
         except json.JSONDecodeError:
             match = re.search(r"\{[\s\S]*\}", text)
             if match:
-                return json.loads(match.group(0))
+                raw_json = match.group(0)
+                try:
+                    return json.loads(raw_json)
+                except json.JSONDecodeError:
+                    # 去除行末多余逗号等常见格式瑕疵
+                    cleaned = re.sub(r",\s*([\]}])", r"\1", raw_json)
+                    try:
+                        return json.loads(cleaned)
+                    except Exception:
+                        pass
             raise ValueError(f"无法从 LLM 返回的内容中解析出合法 JSON: {text[:200]}...")

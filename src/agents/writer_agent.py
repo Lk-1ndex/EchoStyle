@@ -41,8 +41,8 @@ class WriterAgent(BaseAgent):
         feedback: Optional[str] = None,
         previous_draft: Optional[str] = None,
     ) -> str:
-        # 1. 动态语义召回最匹配的 Few-shot 片段
-        if not state.memory_snapshot:
+        # 1. 动态语义召回最匹配的 Few-shot 片段 (若 caller 显式传入 [] 则不执行召回)
+        if state.memory_snapshot is None:
             query = f"{state.topic} {state.key_points}"
             state.transition_to(
                 AgentStatus.DRAFTING if not feedback else AgentStatus.REFLECTING,
@@ -51,21 +51,21 @@ class WriterAgent(BaseAgent):
             few_shots = self.memory_manager.retrieve_dynamic_few_shots(query, top_k=3)
             state.memory_snapshot = [{"content": s} for s in few_shots]
 
-        dynamic_shots = [s["content"] for s in state.memory_snapshot]
-        system_prompt = profile.to_system_prompt(dynamic_few_shots=dynamic_shots)
-
+        dynamic_shots = [s["content"] for s in (state.memory_snapshot or [])]
         # 2. 区分【首轮创作】还是【反思重写】
         if feedback and previous_draft:
             state.transition_to(AgentStatus.REFLECTING, f"执行第 {state.retry_count} 轮反思重构...")
             avg_len = profile.quantitative.avg_sentence_length if profile.quantitative else 20.0
-            user_prompt = REWRITE_PROMPT_TEMPLATE.format(
+            task_mode = "rewrite"
+            raw_user_prompt = REWRITE_PROMPT_TEMPLATE.format(
                 draft=previous_draft,
                 feedback=feedback,
                 avg_len=avg_len,
             )
         else:
             state.transition_to(AgentStatus.DRAFTING, f"开始初稿撰写: 主题 [{state.topic}], 目标字数: {state.word_count} 字...")
-            user_prompt = f"""围绕以下新主题创作一篇完整的文章：
+            task_mode = "write"
+            raw_user_prompt = f"""围绕以下新主题创作一篇完整的文章：
 - **文章主题**：{state.topic}
 - **核心论述要点**：
 {state.key_points or '由作者根据主题自由构思，突出深度与独特见解'}
@@ -75,9 +75,26 @@ class WriterAgent(BaseAgent):
 请全情投入作者人设，严格遵守作者的句长与呼吸节奏，杜绝任何 AI 套话。
 """
 
+        # 3. 任务感知 Token 预算装配 (Task-Aware Token Budgeting & 自适应重构增配)
+        system_persona = (
+            f"你是一位拥有鲜明风格的写作者，人设特征：{', '.join(profile.qualitative.tone_persona.persona_traits)}"
+            if profile.qualitative and profile.qualitative.tone_persona
+            else "你是一位具备独立思考质感的写作者"
+        )
+        style_dna = profile.to_system_prompt(dynamic_few_shots=[])
+        system_prompt, budgeted_user_prompt = self.model_provider.assemble_budgeted_prompt(
+            system_persona=system_persona,
+            style_dna=style_dna,
+            memory_exemplars=dynamic_shots,
+            user_task=raw_user_prompt,
+            critique_feedback=feedback or "",
+            task_mode=task_mode,
+            retry_count=state.retry_count,
+        )
+
         generated_text = self.model_provider.chat_completion(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=budgeted_user_prompt,
             temperature=self.llm_config.temperature,
             max_tokens=self.llm_config.max_tokens,
         )
@@ -85,3 +102,6 @@ class WriterAgent(BaseAgent):
         # 记录版本草稿入链
         state.record_draft(agent_name=self.name, draft=generated_text)
         return generated_text
+
+    # 提供便捷别名保持与调用习惯兼容
+    generate = run

@@ -37,6 +37,17 @@ def test_agent_state_transitions():
     assert state.current_status == AgentStatus.COMPLETED
 
 
+def test_completed_with_warning_transition():
+    """验证反思重试用尽未达标时向 COMPLETED_WITH_WARNING 的状态迁移与审计记录"""
+    state = AgentState(topic="降级流转测试")
+    state.transition_to(AgentStatus.DRAFTING, "初稿创作")
+    state.transition_to(AgentStatus.CRITIQUING, "质检验收")
+    state.transition_to(AgentStatus.COMPLETED_WITH_WARNING, "达到最大反思轮次，降级输出当前最高分版本")
+    assert state.current_status == AgentStatus.COMPLETED_WITH_WARNING
+    assert any("COMPLETED_WITH_WARNING" in log for log in state.execution_logs)
+
+
+
 def test_stylometrics_ttr():
     text = "写作者在思考技术，写作者也在思考人生的意义。写作是一场孤独的旅行。"
     metrics = StylometricsAnalyzer.analyze(text)

@@ -224,11 +224,32 @@ class MultiPersonaJudge:
             except Exception:
                 pass
 
-        # 离线模拟裁决
+        # 离线客观规则/语言学特征仲裁 (基于真实文本特征计算而非硬编码 winner="A")
+        from src.evaluation.metrics import MetricEvaluator
+        from src.analyzer.stylometrics import StylometricsAnalyzer
+
+        target_m = StylometricsAnalyzer.analyze(author_ref)
+        fit_a, _ = MetricEvaluator.evaluate_stylometric_fit(sample_a, target_m)
+        anti_a, _, _ = MetricEvaluator.evaluate_anti_ai(sample_a)
+        disc_a, _ = MetricEvaluator.evaluate_discourse_fit(sample_a)
+        total_a = fit_a * 0.35 + anti_a * 0.35 + disc_a * 0.30
+
+        fit_b, _ = MetricEvaluator.evaluate_stylometric_fit(sample_b, target_m)
+        anti_b, _, _ = MetricEvaluator.evaluate_anti_ai(sample_b)
+        disc_b, _ = MetricEvaluator.evaluate_discourse_fit(sample_b)
+        total_b = fit_b * 0.35 + anti_b * 0.35 + disc_b * 0.30
+
+        if total_a > total_b + 2.0:
+            winner = "A"
+        elif total_b > total_a + 2.0:
+            winner = "B"
+        else:
+            winner = "TIE"
+
         return {
             "persona": persona.name,
-            "score_a": 88.0,
-            "score_b": 60.0,
-            "winner": "A",
-            "comment": f"基于{persona.name}视角的离线客观评价"
+            "score_a": round(total_a, 1),
+            "score_b": round(total_b, 1),
+            "winner": winner,
+            "comment": f"[{persona.name}] 离线语言学特征客观判定：样本 A ({total_a:.1f}) vs 样本 B ({total_b:.1f})"
         }

@@ -26,4 +26,7 @@ packages = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "integration: marks test as real integration / smoke test",
+]
 

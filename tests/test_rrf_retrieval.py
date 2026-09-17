@@ -33,3 +33,40 @@ def test_rrf_reciprocal_rank_fusion_math():
         # 第一名 rank=1 时，理论得分为 1 / 61 ≈ 0.016393
         expected_top_score = round(1.0 / (60 + 1), 6)
         assert abs(results[0]["rrf_score"] - expected_top_score) < 0.001
+
+
+def test_dense_search_with_embeddings():
+    """验证纯密集向量检索 dense_search 依据余弦相似度排序并记录 dense_score"""
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "dense_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        store.chunks = [
+            {"id": "doc_1", "content": "技术架构与分布式系统", "embedding": [1.0, 0.0, 0.0], "metadata": {"type": "argument"}},
+            {"id": "doc_2", "content": "文学随笔与人生感悟", "embedding": [0.0, 1.0, 0.0], "metadata": {"type": "quote"}},
+        ]
+
+        # 模拟 query 向量偏向 doc_1
+        with patch.object(store.model_provider, "get_embeddings", return_value=[[0.95, 0.05, 0.0]]):
+            results = store.dense_search("技术与架构演进", top_k=2)
+            assert len(results) == 2
+            assert results[0]["id"] == "doc_1"
+            assert "dense_score" in results[0]
+            assert results[0]["dense_score"] > results[1]["dense_score"]
+
+        # 验证带 type_filter
+        with patch.object(store.model_provider, "get_embeddings", return_value=[[0.95, 0.05, 0.0]]):
+            filtered = store.dense_search("技术与架构演进", top_k=2, type_filter="quote")
+            assert len(filtered) == 1
+            assert filtered[0]["id"] == "doc_2"
+
+            # 验证不存在的类型返回空列表，绝不静默降级为其他类型
+            non_existent = store.dense_search("技术与架构演进", top_k=2, type_filter="non_existent")
+            assert non_existent == []
+
+            # 验证 hybrid_search 不存在类型也返回空列表
+            non_existent_hybrid = store.hybrid_search("技术与架构演进", top_k=2, type_filter="non_existent")
+            assert non_existent_hybrid == []
+

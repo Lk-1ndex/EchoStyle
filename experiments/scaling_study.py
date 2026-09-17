@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -161,137 +162,171 @@ CORPUS_POOL_20 = [
 ]
 
 
-def run_scaling_study():
+def run_scaling_study(bootstrap_rounds: int = 50, seed: int = 42):
     console.print(Panel.fit(
-        "[bold cyan]EchoStyle 3.2 — 20 篇样本超大规模收敛实验 (20-Sample Scaling Convergence)[/bold cyan]\n"
-        "[white]学术严谨性验证：样本规模梯度 (1篇 vs 3篇 vs 5篇 vs 10篇 vs 20篇) 对语言学指纹均方误差 (MSE) 与稳定性的渐近收敛曲线[/white]"
+        "[bold cyan]EchoStyle 3.2 — 20 篇样本规模渐近收敛实验 (Bootstrap Monte Carlo Scaling Study)[/bold cyan]\n"
+        "[white]学术严谨性验证：基于 50 组随机重采样 (Bootstrap) 评估样本规模 (1/3/5/10/20 篇) 对语言学指纹 MSE 均值与 95% 置信区间的渐近收敛曲线[/white]"
     ))
 
-    # 1. 20 篇全量作者代表作作为真实黄金上限 (20-Sample Asymptotic Ground Truth)
+    import random
+    random.seed(seed)
+
+    # 1. 20 篇全量作者语料作为池内经验基准上限 (Empirical Upper Bound Reference by Definition)
     full_corpus = "\n\n".join(CORPUS_POOL_20)
     truth_m = StylometricsAnalyzer.analyze(full_corpus)
 
     scale_conditions = [
-        {"name": "极简冷启动 (1篇样本)", "count": 1, "samples": CORPUS_POOL_20[:1]},
-        {"name": "初步稳定 (3篇样本)", "count": 3, "samples": CORPUS_POOL_20[:3]},
-        {"name": "黄金平衡点 (5篇样本)", "count": 5, "samples": CORPUS_POOL_20[:5]},
-        {"name": "深度建模 (10篇样本)", "count": 10, "samples": CORPUS_POOL_20[:10]},
-        {"name": "全量上限 (20篇样本)", "count": 20, "samples": CORPUS_POOL_20[:20]},
+        {"name": "1 篇 (极简冷启动)", "count": 1},
+        {"name": "3 篇 (初步稳定)", "count": 3},
+        {"name": "5 篇 (黄金平衡点)", "count": 5},
+        {"name": "10 篇 (深度建模)", "count": 10},
+        {"name": "20 篇 (全量封闭基准)", "count": 20},
     ]
 
     results = []
 
     for cond in scale_conditions:
-        text = "\n\n".join(cond["samples"])
-        m = StylometricsAnalyzer.analyze(text)
+        n = cond["count"]
+        rounds = 1 if n == 20 else bootstrap_rounds
+        mses: List[float] = []
+        convs: List[float] = []
+        chars_list: List[int] = []
+        lens_list: List[float] = []
+        stds_list: List[float] = []
+        sttrs_list: List[float] = []
+        ents_list: List[float] = []
 
-        # 记忆切片与篇章覆盖
-        vstore = VectorStore()
-        mem_mgr = MemoryManager(vector_store=vstore)
-        total_chunks = 0
-        for i, s in enumerate(cond["samples"]):
-            formatted = s.replace("\n", "\n\n")
-            total_chunks += mem_mgr.ingest_article(f"Sample_{i}", formatted)
+        console.print(f"[yellow]>> 正在执行 {cond['name']} 规模评估 (Bootstrap 迭代: {rounds} 次)...[/yellow]")
 
-        stats = mem_mgr.get_memory_stats()
-        type_dist = stats.get("type_breakdown", {})
+        for _ in range(rounds):
+            sampled = CORPUS_POOL_20 if n == 20 else random.sample(CORPUS_POOL_20, n)
+            text = "\n\n".join(sampled)
+            m = StylometricsAnalyzer.analyze(text)
 
-        # 计算相对 20 篇黄金基准的相对误差
-        rel_len = (m.avg_sentence_length - truth_m.avg_sentence_length) / truth_m.avg_sentence_length
-        rel_std = (m.sentence_length_std - truth_m.sentence_length_std) / truth_m.sentence_length_std
-        rel_sttr = (m.sttr - truth_m.sttr) / truth_m.sttr
-        rel_ent = (m.punctuation_entropy - truth_m.punctuation_entropy) / truth_m.punctuation_entropy
+            rel_len = (m.avg_sentence_length - truth_m.avg_sentence_length) / truth_m.avg_sentence_length
+            rel_std = (m.sentence_length_std - truth_m.sentence_length_std) / truth_m.sentence_length_std
+            rel_sttr = (m.sttr - truth_m.sttr) / truth_m.sttr
+            rel_ent = (m.punctuation_entropy - truth_m.punctuation_entropy) / truth_m.punctuation_entropy
 
-        # 核心数理统计指标：均方误差 MSE (Mean Squared Error)
-        mse = (rel_len ** 2 + rel_std ** 2 + rel_sttr ** 2 + rel_ent ** 2) / 4.0
-        rmse = math.sqrt(mse)
-        convergence_pct = max(0.0, min(100.0, round((1.0 - rmse) * 100, 1)))
+            mse = (rel_len ** 2 + rel_std ** 2 + rel_sttr ** 2 + rel_ent ** 2) / 4.0
+            rmse = math.sqrt(mse)
+            convergence_pct = max(0.0, min(100.0, round((1.0 - rmse) * 100, 2)))
+
+            mses.append(mse)
+            convs.append(convergence_pct)
+            chars_list.append(m.total_chars)
+            lens_list.append(m.avg_sentence_length)
+            stds_list.append(m.sentence_length_std)
+            sttrs_list.append(m.sttr)
+            ents_list.append(m.punctuation_entropy)
+
+        # 统计量聚合
+        mean_mse = sum(mses) / len(mses)
+        std_mse = math.sqrt(sum((x - mean_mse) ** 2 for x in mses) / max(1, len(mses) - 1)) if len(mses) > 1 else 0.0
+        ci_mse = 1.96 * std_mse / math.sqrt(len(mses)) if len(mses) > 1 else 0.0
+
+        mean_conv = sum(convs) / len(convs)
+        std_conv = math.sqrt(sum((x - mean_conv) ** 2 for x in convs) / max(1, len(convs) - 1)) if len(convs) > 1 else 0.0
+
+        # 代表性样本的记忆切片计算 (使用独立临时空间统计，杜绝污染生产 style_memory.json)
+        rep_sample = CORPUS_POOL_20[:n]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_store_path = Path(tmp_dir) / "temp_scale_store.json"
+            vstore = VectorStore(storage_path=str(temp_store_path))
+            mem_mgr = MemoryManager(vector_store=vstore)
+            total_chunks = sum(
+                len(mem_mgr._chunk_article(f"Sample_{i}", s.replace("\n", "\n\n")))
+                for i, s in enumerate(rep_sample)
+            )
 
         results.append({
             "cond": cond["name"],
-            "count": cond["count"],
-            "total_chars": m.total_chars,
-            "avg_len": m.avg_sentence_length,
-            "std_dev": m.sentence_length_std,
-            "sttr": m.sttr,
-            "entropy": m.punctuation_entropy,
+            "count": n,
+            "rounds": rounds,
+            "total_chars": int(sum(chars_list) / len(chars_list)),
+            "avg_len": sum(lens_list) / len(lens_list),
+            "std_dev": sum(stds_list) / len(stds_list),
+            "sttr": sum(sttrs_list) / len(sttrs_list),
+            "entropy": sum(ents_list) / len(ents_list),
             "chunks": total_chunks,
-            "types_covered": len(type_dist),
-            "mse": round(mse, 4),
-            "convergence_pct": convergence_pct,
+            "mse_mean": mean_mse,
+            "mse_std": std_mse,
+            "mse_ci": ci_mse,
+            "conv_mean": mean_conv,
+            "conv_std": std_conv,
         })
 
     # 打印收敛结果大表
-    table = Table(title="语料样本规模与文风特征均方误差收敛矩阵 (20-Sample Asymptotic Scaling)")
+    table = Table(title="语料样本规模与文风特征均方误差收敛矩阵 (Bootstrap Monte Carlo Scaling)")
     table.add_column("样本规模梯度", style="cyan bold")
-    table.add_column("总字数", justify="right")
+    table.add_column("平均总字数", justify="right")
     table.add_column("平均句长", justify="right")
-    table.add_column("句长离散度 σ", justify="right")
-    table.add_column("标准化STTR", justify="right")
-    table.add_column("标点熵", justify="right")
-    table.add_column("记忆切片数", justify="right")
-    table.add_column("均方误差 MSE", justify="right")
-    table.add_column("指纹收敛度", style="green bold", justify="right")
+    table.add_column("句长波动 σ", justify="right")
+    table.add_column("标准化 STTR", justify="right")
+    table.add_column("切片数", justify="right")
+    table.add_column("MSE (Mean ± Std)", justify="right")
+    table.add_column("MSE 95% 置信区间", justify="right")
+    table.add_column("指纹收敛度 (Mean ± Std)", style="green bold", justify="right")
 
     for r in results:
+        mse_str = f"{r['mse_mean']:.4f} ± {r['mse_std']:.4f}" if r['rounds'] > 1 else "0.0000 (定义基准)"
+        ci_str = f"[{max(0.0, r['mse_mean'] - r['mse_ci']):.4f}, {r['mse_mean'] + r['mse_ci']:.4f}]" if r['rounds'] > 1 else "[0.0000, 0.0000]"
+        conv_str = f"{r['conv_mean']:.1f}% ± {r['conv_std']:.1f}%" if r['rounds'] > 1 else "100.0% (基准)"
         table.add_row(
             r["cond"],
-            f"{r['total_chars']} 字",
+            f"~{r['total_chars']} 字",
             f"{r['avg_len']:.1f}",
             f"{r['std_dev']:.1f}",
             f"{r['sttr']:.3f}",
-            f"{r['entropy']:.2f}",
             f"{r['chunks']} 块",
-            f"{r['mse']:.4f}",
-            f"{r['convergence_pct']}%",
+            mse_str,
+            ci_str,
+            conv_str,
         )
-
-    # 黄金基准行
-    table.add_row(
-        "[bold white]20篇全量基准 (Ground Truth)[/bold white]",
-        f"[bold white]{truth_m.total_chars} 字[/bold white]",
-        f"[bold white]{truth_m.avg_sentence_length:.1f}[/bold white]",
-        f"[bold white]{truth_m.sentence_length_std:.1f}[/bold white]",
-        f"[bold white]{truth_m.sttr:.3f}[/bold white]",
-        f"[bold white]{truth_m.punctuation_entropy:.2f}[/bold white]",
-        f"{results[-1]['chunks']} 块",
-        "0.0000",
-        "[bold green]100.0%[/bold green]",
-    )
 
     console.print(table)
 
     # 打印科学发现与工业指导
-    console.print("\n[bold yellow]💡 科学结论与工程指导建议 (Empirical Scientific Findings):[/bold yellow]")
-    console.print("1. [bold]冷启动有效性 (1~3篇，~1000字)[/bold]：作者的核心句法偏好（短句爆发力、口头禅）在 1 篇时已呈现，3 篇时 MSE 显著收敛至 0.008，收敛度达 90% 以上。")
-    console.print("2. [bold]工业级黄金平衡点 (5篇，~1600字)[/bold]：5 篇代表作时，均方误差 MSE 降至 [bold green]0.001 以下[/bold green]，收敛度达到 [bold green]96.8%[/bold green]，篇章功能切片完整饱和。")
-    console.print("3. [bold]渐近收敛极限 (10~20篇，~6000字)[/bold]：从 5 篇增加到 20 篇，指纹收敛度仅从 96.8% 微升至 100.0%（边际增益仅 3.2%）。这在数理统计上证明了：[bold cyan]个人文风具备高度自相似分形特征，工业落地只需 5 篇高质量原创样文即可实现高保真建模，无须盲目堆砌数十篇语料！[/bold cyan]")
+    console.print("\n[bold yellow]💡 科学统计结论与工程边界澄清 (Empirical Findings & Disclaimers):[/bold yellow]")
+    console.print("1. [bold]数理基准澄清[/bold]：20 篇全集 MSE=0 与收敛度 100% 为当前语料池内的封闭渐近参照系（Mathematical Definition），而非模型外生泛化能力的实验发现。")
+    console.print(f"2. [bold]Bootstrap 重采样证据[/bold]：经 50 组随机无放回重采样检验，排除样本顺序偶然性后，5 篇样本时 MSE 均值降至 [bold green]{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}[/bold green]，收敛度均值达 [bold green]{results[2]['conv_mean']:.1f}%[/bold green]，抽样方差显著收缩。")
+    console.print("3. [bold]泛化局限性说明[/bold]：本结论严格建立在同作者、同题材的 20 篇高同质性语料池上。跨作者、跨体裁的'普遍 5 篇收敛假说'仍需独立多作者基准检验，不可脱离语境绝对化推广。")
 
-    # 导出报告
-    report_file = Path("./profiles/scaling_study_report.md")
+    # 导出报告至 reports/ 目录（纳入版本控制）
+    report_file = Path("./reports/scaling_study_report.md")
     report_file.parent.mkdir(parents=True, exist_ok=True)
-    report_md = f"""# EchoStyle 3.2 样本规模渐近收敛实验报告 (20-Sample Scaling Report)
+    report_md = f"""# EchoStyle 3.2 样本规模渐近收敛实验报告 (Bootstrap Scaling Report)
 
 - **评测时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
-- **语料规模**：1篇、3篇、5篇、10篇、20篇样本梯度（最高 6,000+ 字）
+- **语料规模**：1 篇、3 篇、5 篇、10 篇、20 篇样本梯度
+- **实验方法**：Monte Carlo 随机组合重采样 (K=50 次迭代/规模)，排除文章输入顺序偶然性
 
-## 一、 均方误差 (MSE) 与收敛度实测大表
+## 一、 均方误差 (MSE) 与收敛度实测大表 (Mean ± Std & 95% CI)
 
-| 样本规模配置 | 语料总字数 | 平均句长 (字) | 句长离散度 (σ) | 标准化 STTR | 记忆切片数 | 均方误差 MSE | 综合收敛度 |
+| 样本规模梯度 | 平均总字数 | 平均句长 (字) | 句长离散度 (σ) | 标准化 STTR | 均方误差 MSE (Mean ± Std) | MSE 95% 置信区间 | 综合收敛度 (Mean ± Std) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1 篇 (极简冷启动)** | {results[0]['total_chars']} 字 | {results[0]['avg_len']:.1f} | {results[0]['std_dev']:.1f} | {results[0]['sttr']:.3f} | {results[0]['chunks']} 块 | {results[0]['mse']:.4f} | **{results[0]['convergence_pct']}%** |
-| **3 篇 (初步稳定)** | {results[1]['total_chars']} 字 | {results[1]['avg_len']:.1f} | {results[1]['std_dev']:.1f} | {results[1]['sttr']:.3f} | {results[1]['chunks']} 块 | {results[1]['mse']:.4f} | **{results[1]['convergence_pct']}%** |
-| **5 篇 (黄金平衡点)** | {results[2]['total_chars']} 字 | {results[2]['avg_len']:.1f} | {results[2]['std_dev']:.1f} | {results[2]['sttr']:.3f} | {results[2]['chunks']} 块 | **{results[2]['mse']:.4f}** | **{results[2]['convergence_pct']}%** |
-| **10 篇 (深度建模)** | {results[3]['total_chars']} 字 | {results[3]['avg_len']:.1f} | {results[3]['std_dev']:.1f} | {results[3]['sttr']:.3f} | {results[3]['chunks']} 块 | {results[3]['mse']:.4f} | **{results[3]['convergence_pct']}%** |
-| **20 篇 (全量上限)** | {results[4]['total_chars']} 字 | {results[4]['avg_len']:.1f} | {results[4]['std_dev']:.1f} | {results[4]['sttr']:.3f} | {results[4]['chunks']} 块 | {results[4]['mse']:.4f} | **{results[4]['convergence_pct']}%** |
+| **1 篇 (极简冷启动)** | ~{results[0]['total_chars']} 字 | {results[0]['avg_len']:.1f} | {results[0]['std_dev']:.1f} | {results[0]['sttr']:.3f} | {results[0]['mse_mean']:.4f} ± {results[0]['mse_std']:.4f} | [{max(0.0, results[0]['mse_mean'] - results[0]['mse_ci']):.4f}, {results[0]['mse_mean'] + results[0]['mse_ci']:.4f}] | **{results[0]['conv_mean']:.1f}% ± {results[0]['conv_std']:.1f}%** |
+| **3 篇 (初步稳定)** | ~{results[1]['total_chars']} 字 | {results[1]['avg_len']:.1f} | {results[1]['std_dev']:.1f} | {results[1]['sttr']:.3f} | {results[1]['mse_mean']:.4f} ± {results[1]['mse_std']:.4f} | [{max(0.0, results[1]['mse_mean'] - results[1]['mse_ci']):.4f}, {results[1]['mse_mean'] + results[1]['mse_ci']:.4f}] | **{results[1]['conv_mean']:.1f}% ± {results[1]['conv_std']:.1f}%** |
+| **5 篇 (黄金平衡点)** | ~{results[2]['total_chars']} 字 | {results[2]['avg_len']:.1f} | {results[2]['std_dev']:.1f} | {results[2]['sttr']:.3f} | **{results[2]['mse_mean']:.4f} ± {results[2]['mse_std']:.4f}** | **[{max(0.0, results[2]['mse_mean'] - results[2]['mse_ci']):.4f}, {results[2]['mse_mean'] + results[2]['mse_ci']:.4f}]** | **{results[2]['conv_mean']:.1f}% ± {results[2]['conv_std']:.1f}%** |
+| **10 篇 (深度建模)** | ~{results[3]['total_chars']} 字 | {results[3]['avg_len']:.1f} | {results[3]['std_dev']:.1f} | {results[3]['sttr']:.3f} | {results[3]['mse_mean']:.4f} ± {results[3]['mse_std']:.4f} | [{max(0.0, results[3]['mse_mean'] - results[3]['mse_ci']):.4f}, {results[3]['mse_mean'] + results[3]['mse_ci']:.4f}] | **{results[3]['conv_mean']:.1f}% ± {results[3]['conv_std']:.1f}%** |
+| **20 篇 (全量封闭基准)** | {results[4]['total_chars']} 字 | {results[4]['avg_len']:.1f} | {results[4]['std_dev']:.1f} | {results[4]['sttr']:.3f} | 0.0000 (定义基准) | [0.0000, 0.0000] | **100.0% (基准参照系)** |
 
-## 二、 核心科学结论与理论解释
-1. **参数均方误差递减率**：从 1 篇到 5 篇，估计误差呈指数级快速衰减；
-2. **渐近收敛分水岭**：在 **5 篇代表作（约 1500~1800 字）** 时，MSE 误差已降至 0.001 数量级，综合指纹收敛度突破 96.5%；
-3. **边际成本最优建议**：从 5 篇扩展到 20 篇，收敛度仅带来约 3% 的微弱边际提升，但 token 消耗与检索稀释风险成倍增加。因此，工业界落地与日常用户建模的**黄金推荐规模为 5 篇代表作**。
+> ⚠️ **数理基准说明 (Mathematical Ground Truth Definition)**：
+> 20 篇自身构成了本实验中目标作者特征空间的经验渐近全集。
+> 20 篇条件下的 MSE = 0 与收敛度 = 100% 为**数理定义导致的基准参照原点**，不能脱离该定义断言文风绝对饱和。
+
+## 二、 核心统计发现与严谨学术归因
+1. **抽样方差快速收敛**：
+   在 1 篇时，抽样 MSE 标准差高达 ±{results[0]['mse_std']:.4f}，表明不同单篇文章之间的句法离散度差异巨大；而当随机样本增至 5 篇时，MSE 均值降至 {results[2]['mse_mean']:.4f}，标准差收缩至 ±{results[2]['mse_std']:.4f}，95% 置信区间显著收紧，表明作者的核心语言学特征（句长、STTR、标点熵）在此样本规模下已进入统计稳态。
+2. **工程边际收益递减拐点**：
+   从 5 篇增加到 10 篇，指纹收敛度仅由 {results[2]['conv_mean']:.1f}% 微升至 {results[3]['conv_mean']:.1f}%（提升仅约 {results[3]['conv_mean'] - results[2]['conv_mean']:.1f}%），但所需语料字数翻倍，且在 RAG 检索中面临更多跨文章论述稀释的风险。因此，从工程性价比出发，5 篇为工业落地的推荐规模。
+3. **泛化边界与未竟探索 (Limitations)**：
+   本实验基于同一作者高同质性的 20 篇时评杂文。这只能证明**该特定语料池内的特征渐近规律**，不足以直接推出“所有人类写作者普遍在 5 篇处收敛”。跨作者、跨体裁的普遍有效性，仍有待多作者独立评测集进一步验证。
 """
     report_file.write_text(report_md, encoding="utf-8")
-    console.print(f"\n[bold green]20 篇超大规模收敛实验报告已成功更新至:[/bold green] {report_file}")
+    # 同时保留 profiles 副本以防兼容性依赖
+    (Path("./profiles") / "scaling_study_report.md").write_text(report_md, encoding="utf-8")
+    console.print(f"\n[bold green]Bootstrap 规模渐近收敛实验报告已成功更新至:[/bold green] {report_file}")
 
 
 if __name__ == "__main__":

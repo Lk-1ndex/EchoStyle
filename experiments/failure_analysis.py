@@ -73,13 +73,13 @@ def run_failure_analysis():
 
     console.print(table)
 
-    # 导出报告
-    report_file = Path("./profiles/failure_cases_analysis.md")
+    # 导出报告至 reports/ 目录
+    report_file = Path("./reports/failure_cases_analysis.md")
     report_file.parent.mkdir(parents=True, exist_ok=True)
-    report_md = f"""# EchoStyle 3.2 失败案例与系统边界深度剖析报告 (Failure Analysis Report)
+    report_md = f"""# EchoStyle 3.2 失败模式与系统边界深度剖析报告 (Failure Modes Analysis Report)
 
 - **分析时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
-- **核心宗旨**：真正的工程落地系统不回避失败，必须明确系统工作边界，并在架构中设计自愈与降级机制。
+- **核心宗旨**：正视系统落地边界，归纳 3 类已知 Failure Modes 并提出架构级缓解策略。
 
 ---
 
@@ -104,7 +104,8 @@ def run_failure_analysis():
 """
 
     report_file.write_text(report_md, encoding="utf-8")
-    console.print(f"\n[bold green]失败案例分析报告已成功归档至:[/bold green] {report_file}")
+    (Path("./profiles") / "failure_cases_analysis.md").write_text(report_md, encoding="utf-8")
+    console.print(f"\n[bold green]失败模式分析报告已成功归档至:[/bold green] {report_file}")
 
 
 if __name__ == "__main__":

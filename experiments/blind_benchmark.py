@@ -39,15 +39,40 @@ SAMPLE_ESSAY_REF = """# 别把信息搬运当成深度思考
 保持尖锐，保持口语化，保持那种带点自嘲却绝不妥协的语言质感。这是我们在算法洪流里唯一能守住的阵地。"""
 
 
-def run_blind_benchmark():
+import argparse
+
+
+def run_blind_benchmark(simulate: bool = False, output_path: str = None):
     console.print(Panel.fit(
         "[bold cyan]EchoStyle 3.1 — 规范化双盲评测套件 (Blind Pairwise Benchmark)[/bold cyan]\n"
         "[white]5 项多领域评测选题：随机盲打 (A/B Shuffled)，杜绝位置偏置，输出真实胜率与 95% Wilson Score 置信区间[/white]"
     ))
 
     config = load_config()
-    provider = ModelProvider(config.llm, config.embedding) if config.llm.api_key else None
-    coordinator = CoordinatorAgent(config) if config.llm.api_key else None
+    has_api_key = bool(config.llm.api_key and config.llm.api_key.strip() and not config.llm.api_key.startswith("sk-xxxx"))
+
+    if not has_api_key and not simulate:
+        console.print(Panel.fit(
+            "[bold red]❌ 运行阻断 (Fail Closed): 未检测到有效的大模型 API Key！[/bold red]\n\n"
+            "[yellow]双盲评测实验默认禁止在未显式声明的情况下使用硬编码模拟数据生成实测报告。\n"
+            "1. 若需配置真实 API Key，请在 config.yaml 中填入有效的 llm.api_key；\n"
+            "2. 若需在离线环境下验证评测打分与 Wilson 置信区间计算流程，请显式添加参数: [bold white]--simulate[/bold white][/yellow]\n\n"
+            "[dim]运行命令: python experiments/blind_benchmark.py --simulate[/dim]",
+            title="[bold red]评测安全阻断[/bold red]"
+        ))
+        sys.exit(1)
+
+    is_simulation = not has_api_key or simulate
+    if is_simulation:
+        console.print(Panel.fit(
+            "[bold yellow]⚠️  警告：当前运行在离线模拟数据模式 (MODE: SIMULATION / NOT A REAL BENCHMARK)[/bold yellow]\n"
+            "[white]所有成文与指标为基于已知规则分布生成的测试桩数据，绝不代表真实在线 LLM 生成！\n"
+            "报告顶部将强制标记离线水印，不可用作实测性能论据。[/white]",
+            title="模式声明"
+        ))
+
+    provider = ModelProvider(config.llm, config.embedding) if has_api_key and not simulate else None
+    coordinator = CoordinatorAgent(config) if has_api_key and not simulate else None
 
     results = []
 
@@ -112,14 +137,26 @@ def run_blind_benchmark():
     console.print(table)
 
     # 导出报告
-    report_file = Path("./profiles/blind_benchmark_report.md")
-    report_file.parent.mkdir(parents=True, exist_ok=True)
+    default_filename = "blind_benchmark_simulation.md" if is_simulation else "blind_benchmark_report.md"
+    target_report_file = Path(output_path) if output_path else Path(f"./reports/{default_filename}")
+    target_report_file.parent.mkdir(parents=True, exist_ok=True)
+
+    mode_banner = (
+        "> ⚠️ **免责声明与模式标记 (SIMULATION MODE / NOT A REAL BENCHMARK)**：\n"
+        "> 本报告生成于**离线模拟数据模式**（未检测到真实有效 API Key 或显式指定 `--simulate`）。\n"
+        "> 报告内对决结果与胜率数据为验证统计管道的桩数据，**不可作为学术或工业实测结论**！\n"
+        "> 真实实测请配置 API Key 并运行 `python main.py benchmark --blind`。"
+        if is_simulation
+        else "> **评测模式**：真实 LLM 在线双盲对决 (REAL LLM EXECUTION)"
+    )
+
     report_md = f"""# EchoStyle 3.1 规范化双盲评测报告 (Blind Evaluation Report)
 
 - **评测时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
 - **评测任务数**：{summary.total_trials} 组
 - **加权综合胜率**：**{summary.win_rate * 100:.1f}%**
 - **95% Wilson Score 置信区间**：**[{summary.ci_lower * 100:.1f}%, {summary.ci_upper * 100:.1f}%]**
+{mode_banner}
 
 ## 一、 对决明细表
 
@@ -133,9 +170,15 @@ def run_blind_benchmark():
 ## 二、 统计显著性分析
 在 95% 置信水平下，EchoStyle 相对传统 Baseline 的胜率置信下界为 **{summary.ci_lower * 100:.1f}%**，显著高于 50% 随机基准线，证实了系统在去 AI 八股味与篇章呼吸感上的显著优势。
 """
-    report_file.write_text(report_md, encoding="utf-8")
-    console.print(f"\n[bold green]双盲评测报告已成功导出至:[/bold green] {report_file}")
+    target_report_file.write_text(report_md, encoding="utf-8")
+    (Path("./profiles") / default_filename).write_text(report_md, encoding="utf-8")
+    console.print(f"\n[bold green]双盲评测报告已成功导出至:[/bold green] {target_report_file}")
 
 
 if __name__ == "__main__":
-    run_blind_benchmark()
+    parser = argparse.ArgumentParser(description="EchoStyle 3.1 规范化双盲评测套件")
+    parser.add_argument("--simulate", action="store_true", help="离线模拟模式 (无真实 API Key 时用于流程验证)")
+    parser.add_argument("--output", help="自定义报告输出路径")
+    cli_args = parser.parse_args()
+
+    run_blind_benchmark(simulate=cli_args.simulate, output_path=cli_args.output)

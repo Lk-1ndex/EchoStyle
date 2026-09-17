@@ -46,6 +46,48 @@ class VectorStore:
         self._save()
         return added
 
+    def dense_search(
+        self,
+        query: str,
+        top_k: int = 3,
+        type_filter: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        纯密集向量语义检索 (Dense Semantic Search)：
+        仅依据稠密向量余弦相似度排序，不执行稀疏词频 (Sparse/BM25) 统计，不经过 RRF 倒数排名融合。
+        用于消融实验 Standard Semantic RAG (Condition C1) 严格控制变量。
+        """
+        if not self.chunks:
+            return []
+
+        candidates = self.chunks
+        if type_filter:
+            candidates = [
+                c for c in candidates
+                if c.get("metadata", {}).get("type") == type_filter or c.get("type") == type_filter
+            ]
+            if not candidates:
+                return []
+
+        query_embs = self.model_provider.get_embeddings([query])
+        query_dense = query_embs[0] if query_embs else None
+
+        if query_dense and any(c.get("embedding") is not None for c in candidates):
+            dense_scores = []
+            for c in candidates:
+                emb = c.get("embedding")
+                score = self._cosine_similarity(query_dense, emb) if emb else 0.0
+                dense_scores.append((score, c))
+            dense_scores.sort(key=lambda x: x[0], reverse=True)
+            results = []
+            for score, c in dense_scores[:top_k]:
+                item = dict(c)
+                item["dense_score"] = round(score, 6)
+                results.append(item)
+            return results
+        else:
+            return candidates[:top_k]
+
     def hybrid_search(
         self,
         query: str,
@@ -61,9 +103,12 @@ class VectorStore:
         # 候选集类型过滤
         candidates = self.chunks
         if type_filter:
-            filtered = [c for c in candidates if c.get("metadata", {}).get("type") == type_filter]
-            if filtered:
-                candidates = filtered
+            candidates = [
+                c for c in candidates
+                if c.get("metadata", {}).get("type") == type_filter or c.get("type") == type_filter
+            ]
+            if not candidates:
+                return []
 
         # 1. 密集向量检索通道 (Dense Retrieval)
         query_embs = self.model_provider.get_embeddings([query])

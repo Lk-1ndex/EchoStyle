@@ -77,7 +77,7 @@ class CoordinatorAgent(BaseAgent):
         **kwargs
     ) -> Tuple[str, EvaluationReport, AgentState]:
         """
-        实现 BaseAgent 统一契约规范的核心执行入口 (动态自主规划调度)
+        实现 BaseAgent 统一契约规范的核心执行入口 (受控工作流调度与工具编排)
         """
         state.topic = topic or state.topic
         state.key_points = key_points or state.key_points
@@ -85,7 +85,7 @@ class CoordinatorAgent(BaseAgent):
         state.target_audience = target_audience or state.target_audience
         state.max_retries = self.config.agent.max_reflections
 
-        state.execution_logs.append(f"[PLANNER] 启动动态任务规划，目标主题: [{state.topic}]")
+        state.execution_logs.append(f"[WORKFLOW] 启动任务工作流调度，目标主题: [{state.topic}]")
 
         # 动态分支 1：检测是否需要解析样文与建模
         active_profile = profile
@@ -152,7 +152,10 @@ class CoordinatorAgent(BaseAgent):
         if critique_action.decision == "ACCEPT":
             state.transition_to(AgentStatus.COMPLETED, f"终审圆满通过！综合得分: {final_report.overall_score:.1f} 分。")
         else:
-            state.transition_to(AgentStatus.COMPLETED, f"反思重试轮次已满，输出当前最高质量受控版本 (得分: {final_report.overall_score:.1f})。")
+            state.transition_to(
+                AgentStatus.COMPLETED_WITH_WARNING,
+                f"反思重试轮次已满但未达ACCEPT阈值，降级输出当前最高质量版本 (得分: {final_report.overall_score:.1f})。"
+            )
 
         return draft, final_report, state
 
