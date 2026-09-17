@@ -29,3 +29,16 @@ class EmbeddingUnavailableError(EchoStyleException):
     """向量服务不可用异常（Fail-Closed 严控检索语义纯度，拒绝静默退化）"""
     pass
 
+
+class EmbeddingDimensionMismatchError(EchoStyleException):
+    """向量维度不匹配异常（Fail-Closed 防止 zip 隐式截断计算）"""
+    def __init__(self, query_dim: int, chunk_dim: int, chunk_id: str | None = None):
+        msg = f"向量维度不匹配 (Fail-Closed): Query 维度为 {query_dim}，而候选切片维度为 {chunk_dim}"
+        if chunk_id:
+            msg += f" (切片 ID: {chunk_id})"
+        super().__init__(msg)
+        self.query_dim = query_dim
+        self.chunk_dim = chunk_dim
+        self.chunk_id = chunk_id
+
+

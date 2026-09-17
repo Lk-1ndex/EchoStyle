@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from src.core.config import EmbeddingConfig, LLMConfig
-from src.core.exceptions import EmbeddingUnavailableError
+from src.core.exceptions import EmbeddingUnavailableError, EmbeddingDimensionMismatchError
 from src.core.model_provider import ModelProvider
 
 
@@ -37,6 +37,31 @@ class VectorStore:
 
         # 获取向量
         embeddings = self.model_provider.get_embeddings([c["content"] for c in chunks])
+        if embeddings is not None:
+            # 严格实验/生产环境校验：若向量接口返回非空，必须完整且维度一致
+            if len(embeddings) != len(chunks):
+                raise EmbeddingUnavailableError(
+                    f"向量生成数量不匹配 (Fail-Closed): 期望 {len(chunks)} 个向量，实际返回 {len(embeddings)} 个。"
+                )
+            if any(e is None for e in embeddings):
+                raise EmbeddingUnavailableError(
+                    "向量服务返回了部分 None 空向量，拒绝残缺向量入库 (Fail-Closed)！"
+                )
+            first_dim = len(embeddings[0]) if embeddings else 0
+            for i, emb in enumerate(embeddings):
+                if len(emb) != first_dim:
+                    raise EmbeddingDimensionMismatchError(
+                        query_dim=first_dim, chunk_dim=len(emb), chunk_id=chunks[i].get("id")
+                    )
+
+            # 跨批次维度一致性强校验：若已有切片具有向量，新入库向量必须与已有向量维度严格相等
+            existing_with_emb = [c for c in self.chunks if c.get("embedding") is not None]
+            if existing_with_emb and embeddings:
+                existing_dim = len(existing_with_emb[0]["embedding"])
+                if first_dim != existing_dim:
+                    raise EmbeddingDimensionMismatchError(
+                        query_dim=existing_dim, chunk_dim=first_dim, chunk_id=chunks[0].get("id")
+                    )
 
         added = 0
         for i, chunk in enumerate(chunks):
@@ -56,8 +81,8 @@ class VectorStore:
         """
         纯密集向量语义检索 (Dense Semantic Search)：
         仅依据稠密向量余弦相似度排序，不执行稀疏词频 (Sparse/BM25) 统计，不经过 RRF 倒数排名融合。
-        用于消融实验 Standard Semantic RAG (Condition C1) 严格控制变量。
-        Fail-Closed 机制：若无法获取 query 向量或候选切片缺少 embedding 向量，直接抛出 EmbeddingUnavailableError，严禁静默退化！
+        用于消融实验 Standard Semantic RAG (Condition C1a) 严格控制变量。
+        Fail-Closed 机制：若无法获取 query 向量或候选切片缺少 embedding 向量，直接抛出异常，严禁静默退化！
         """
         if not self.chunks:
             return []
@@ -73,18 +98,25 @@ class VectorStore:
 
         query_embs = self.model_provider.get_embeddings([query])
         query_dense = query_embs[0] if query_embs else None
-        has_chunk_embs = any(c.get("embedding") is not None for c in candidates)
 
-        if not query_dense or not has_chunk_embs:
+        if not query_dense:
             raise EmbeddingUnavailableError(
-                "Dense 语义检索不可用: 无法获取 query 向量或候选切片缺少 embedding 向量。"
+                "Dense 语义检索不可用: 无法获取 query 向量。"
                 "基准消融实验场景下严格禁止静默退化为未排序切片 (Fail-Closed)！"
+            )
+
+        # 严格 Fail-Closed：要求所有候选切片均必须具有有效向量，严禁 partial None 造成静默不公平排序
+        if not all(c.get("embedding") is not None for c in candidates):
+            missing_ids = [c.get("id", "unknown") for c in candidates if c.get("embedding") is None]
+            raise EmbeddingUnavailableError(
+                f"Dense 语义检索不可用: 候选切片存在部分缺少 embedding 向量的情况 (缺失切片: {missing_ids})。"
+                "基准消融实验场景下严格禁止部分切片参与排序 (Fail-Closed)！"
             )
 
         dense_scores = []
         for c in candidates:
-            emb = c.get("embedding")
-            score = self._cosine_similarity(query_dense, emb) if emb else 0.0
+            emb = c["embedding"]
+            score = self._cosine_similarity(query_dense, emb, chunk_id=c.get("id"))
             dense_scores.append((score, c))
         dense_scores.sort(key=lambda x: x[0], reverse=True)
         results = []
@@ -123,20 +155,29 @@ class VectorStore:
         query_embs = self.model_provider.get_embeddings([query])
         query_dense = query_embs[0] if query_embs else None
         has_chunk_embs = any(c.get("embedding") is not None for c in candidates)
+        all_chunk_embs = all(c.get("embedding") is not None for c in candidates)
 
-        if require_dense and (not query_dense or not has_chunk_embs):
-            raise EmbeddingUnavailableError(
-                "Hybrid 检索 Dense 通道不可用: 无法获取 query 向量或候选切片缺少 embedding 向量。"
-                "严格基准对照模式下拒绝退化为纯稀疏排序 (Fail-Closed)！"
-            )
+        if require_dense:
+            if not query_dense:
+                raise EmbeddingUnavailableError(
+                    "Hybrid 检索 Dense 通道不可用: 无法获取 query 向量。"
+                    "严格基准对照模式下拒绝退化为纯稀疏排序 (Fail-Closed)！"
+                )
+            if not all_chunk_embs:
+                missing_ids = [c.get("id", "unknown") for c in candidates if c.get("embedding") is None]
+                raise EmbeddingUnavailableError(
+                    f"Hybrid 检索 Dense 通道不可用: 候选切片存在部分缺少 embedding 向量的情况 (缺失切片: {missing_ids})。"
+                    "严格基准对照模式下拒绝退化为纯稀疏排序 (Fail-Closed)！"
+                )
 
         dense_ranks: Dict[str, int] = {}
         if query_dense and has_chunk_embs:
             dense_scores = []
             for c in candidates:
                 emb = c.get("embedding")
-                score = self._cosine_similarity(query_dense, emb) if emb else 0.0
-                dense_scores.append((score, c["id"]))
+                if emb is not None:
+                    score = self._cosine_similarity(query_dense, emb, chunk_id=c.get("id"))
+                    dense_scores.append((score, c["id"]))
             # 按相似度降序排序，赋予绝对排名 (1-indexed)
             dense_scores.sort(key=lambda x: x[0], reverse=True)
             for rank_idx, (_, cid) in enumerate(dense_scores, start=1):
@@ -201,7 +242,13 @@ class VectorStore:
             json.dump(self.chunks, f, ensure_ascii=False, indent=2)
 
     @staticmethod
-    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    def _cosine_similarity(vec1: List[float], vec2: List[float], chunk_id: Optional[str] = None) -> float:
+        if len(vec1) != len(vec2):
+            raise EmbeddingDimensionMismatchError(
+                query_dim=len(vec1),
+                chunk_dim=len(vec2),
+                chunk_id=chunk_id,
+            )
         dot = sum(a * b for a, b in zip(vec1, vec2))
         norm1 = math.sqrt(sum(a * a for a in vec1))
         norm2 = math.sqrt(sum(b * b for b in vec2))

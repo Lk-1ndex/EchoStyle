@@ -120,6 +120,7 @@ class CoordinatorAgent(BaseAgent):
 
         # 动态分支 3：调用质检决策工具
         critique_action: CritiqueAction = self.tool_registry.get("critique_tool").execute(state, draft=draft, profile=active_profile)
+        best_score = critique_action.score
         state.create_checkpoint("best_version")
 
         # 动态自省与状态机闭环 (Self-Reflection & Dynamic Recovery Loop)
@@ -145,14 +146,30 @@ class CoordinatorAgent(BaseAgent):
             # 重新质检验收
             critique_action = self.tool_registry.get("critique_tool").execute(state, draft=draft, profile=active_profile)
 
-            # 状态自愈判断：若新版本明显退步（分数暴跌），执行回滚保护
+            # 状态自愈判断：若新版本明显退步（相较前一轮评分暴跌超过 15 分），启动回滚保护至历史最高分检查点
             if critique_action.score < (prev_score - 15.0):
-                state.execution_logs.append("[RECOVERY] 检测到反思重构版本评分退步，启动回滚至前一优选检查点...")
+                state.execution_logs.append(
+                    f"[RECOVERY] 检测到反思重构版本评分退步 (当前 {critique_action.score:.1f} < 前轮 {prev_score:.1f} - 15.0)，"
+                    f"启动回滚至历史最优检查点 'best_version' (历史最高分: {best_score:.1f})..."
+                )
                 state.rollback_to("best_version")
                 draft = state.current_draft
                 break
             else:
-                state.create_checkpoint("best_version")
+                # 核心修复 P1-8：只有当新版本得分严格超越历史最优得分时，才更新 best_version 快照！
+                # 避免次优版本（如轻微下滑未触发15分熔断的版本）将真正的历史最高分版本覆盖
+                if critique_action.score > best_score:
+                    best_score = critique_action.score
+                    state.create_checkpoint("best_version")
+
+        # 终态判定：若循环结束且未 ACCEPT，且当前版本不如历史最优，自动回退至最优检查点
+        if critique_action.decision != "ACCEPT" and critique_action.score < best_score:
+            state.execution_logs.append(
+                f"[RECOVERY] 反思重试结束，当前版本得分 ({critique_action.score:.1f}) 低于历史最优 ({best_score:.1f})，"
+                f"自动回退至历史最优检查点 'best_version'..."
+            )
+            state.rollback_to("best_version")
+            draft = state.current_draft
 
         # 终态判定：若触发回滚保护，优先以回滚后 state.latest_report 为准
         final_report = state.latest_report or critique_action.detailed_report

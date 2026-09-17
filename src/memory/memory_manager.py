@@ -54,7 +54,7 @@ class MemoryManager:
         target_type: Optional[str] = None,
     ) -> List[str]:
         """
-        纯密集向量语义检索 (Standard Semantic RAG):
+        纯密集向量语义检索 (Standard Semantic RAG - Condition C1a):
         不使用词频匹配，不经过 RRF 倒数排名融合，用于消融对照组严格控制变量。
         Fail-Closed：若向量不可用直接报错。
         """
@@ -62,6 +62,26 @@ class MemoryManager:
             query=query,
             top_k=top_k,
             type_filter=target_type
+        )
+        return [r["content"] for r in results]
+
+    def retrieve_hybrid(
+        self,
+        query: str,
+        top_k: int = 3,
+        target_type: Optional[str] = None,
+        require_dense: bool = False,
+    ) -> List[str]:
+        """
+        混合 RRF 检索 (Hybrid RRF RAG - Condition C1b):
+        融合 Dense 与 Sparse 词频排名，但不进行任何篇章结构类型过滤 (target_type=None)。
+        用于严格单变量消融实验隔离 RRF 融合算法相较于纯 Dense 的独立贡献。
+        """
+        results = self.vector_store.hybrid_search(
+            query=query,
+            top_k=top_k,
+            type_filter=target_type,
+            require_dense=require_dense,
         )
         return [r["content"] for r in results]
 

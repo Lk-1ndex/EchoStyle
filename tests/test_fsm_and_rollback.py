@@ -159,3 +159,94 @@ def test_coordinator_initial_draft_fsm_and_rollback_recovery():
     assert final_st2.current_status == AgentStatus.COMPLETED_WITH_WARNING
 
 
+def test_coordinator_best_version_tracks_true_historical_maximum():
+    """验证 P1-8 缺陷修复：best_version 严格跟踪历史最高分，绝不被轻微下滑的中间版本覆盖"""
+    from unittest.mock import MagicMock
+    from src.core.config import AppConfig
+    from src.agents.coordinator import CoordinatorAgent
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns, EvaluationReport
+    )
+
+    profile = DeepStyleProfile(
+        name="测试文风",
+        qualitative=StyleProfile(
+            name="测试",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="冷静"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="简短"),
+            lexicon_rhetoric=LexiconRhetoric(metaphor_style="通俗", vocabulary_richness="丰富"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns()
+        )
+    )
+
+    config = AppConfig()
+    coordinator = CoordinatorAgent(config)
+
+    # 模拟场景：
+    # v1 (初稿) = 90.0 (未达到质检80+无八股？假设有细微feedback判定REVISE以触发循环)
+    # v2 (第1轮反思) = 82.0 (相比 90 下降 8 分，未达到 15 分熔断线，继续反思)
+    # v3 (第2轮反思) = 60.0 (相比 82 下降 22 分，触发 15 分熔断回滚！)
+    # 核心预期：回滚后必须回到真正的最高分 v1 (90.0)，绝不能回滚到 82.0！
+
+    report_v1 = EvaluationReport(overall_score=90.0, detected_cliches=["略有套话"], feedback="请进一步提炼")
+    report_v2 = EvaluationReport(overall_score=82.0, detected_cliches=["小瑕疵"], feedback="还可以更好")
+    report_v3 = EvaluationReport(overall_score=60.0, detected_cliches=["老生常谈"], feedback="质量严重暴跌")
+
+    coordinator.critic_agent.judge.evaluate = MagicMock(side_effect=[report_v1, report_v2, report_v3])
+    coordinator.writer_agent.model_provider.chat_completion = MagicMock(side_effect=["版本v2草稿(82分)", "版本v3草稿(60分)"])
+
+    state = AgentState(topic="历史最高分回滚验证")
+    draft, rep, final_st = coordinator.run(state=state, profile=profile, initial_draft="版本v1草稿(90分)")
+
+    assert draft == "版本v1草稿(90分)"  # 核心断言：必须恢复为真正最高分的 v1，而不是 v2！
+    assert rep.overall_score == 90.0    # 核心断言：报告分数必须是 90.0，而非 82.0
+
+
+def test_coordinator_retries_exhausted_recovers_highest_historical_score():
+    """验证重试轮次耗尽且未达 ACCEPT 时，Coordinator 自动回退至历史最优版本，绝不降级输出劣化的末版"""
+    from unittest.mock import MagicMock
+    from src.core.config import AppConfig
+    from src.agents.coordinator import CoordinatorAgent
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns, EvaluationReport
+    )
+
+    profile = DeepStyleProfile(
+        name="测试文风",
+        qualitative=StyleProfile(
+            name="测试",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="冷静"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="简短"),
+            lexicon_rhetoric=LexiconRhetoric(metaphor_style="通俗", vocabulary_richness="丰富"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns()
+        )
+    )
+
+    config = AppConfig()
+    config.agent.max_reflections = 1  # 仅允许 1 轮反思
+    coordinator = CoordinatorAgent(config)
+
+    # 场景：
+    # v1 (初稿) = 78.0 分 (未达 80.0 阈值，进入第 1 轮润色)
+    # v2 (第 1 轮反思) = 72.0 分 (轻微下滑 6 分，未达到 15 分熔断线；但轮次已满跳出循环)
+    # 核心断言：重试耗尽时，系统必须自动自愈回退至历史最高分的 v1 (78.0 分)，绝不能降级输出 v2 (72.0 分)！
+    report_v1 = EvaluationReport(overall_score=78.0, detected_cliches=[], feedback="需进一步润色")
+    report_v2 = EvaluationReport(overall_score=72.0, detected_cliches=[], feedback="仍有改进空间")
+
+    coordinator.critic_agent.judge.evaluate = MagicMock(side_effect=[report_v1, report_v2])
+    coordinator.writer_agent.model_provider.chat_completion = MagicMock(return_value="劣化版v2草稿(72分)")
+
+    state = AgentState(topic="重试耗尽回滚最高分验证")
+    draft, rep, final_st = coordinator.run(state=state, profile=profile, initial_draft="高质量v1草稿(78分)")
+
+    assert draft == "高质量v1草稿(78分)"
+    assert rep.overall_score == 78.0
+    assert final_st.current_status == AgentStatus.COMPLETED_WITH_WARNING
+
+
+
+

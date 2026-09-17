@@ -253,3 +253,132 @@ class MultiPersonaJudge:
             "winner": winner,
             "comment": f"[{persona.name}] 离线语言学特征客观判定：样本 A ({total_a:.1f}) vs 样本 B ({total_b:.1f})"
         }
+
+
+INDEPENDENT_EVALUATOR_SYSTEM_PROMPT = """你是一位独立第三方双盲文风终审评审员与文学审校专家。
+你从未参与任何前序写作引导、修改建议或反思交互过程。
+你的职责是对盲审提交的文章进行完全独立、无偏见、确定性的量化打分。
+
+评测维度说明：
+1. style_fidelity (0-100)：文风神似度，包括人设语气、修辞意象、标志性口头禅是否逼真。
+2. logic_depth (0-100)：逻辑论述深度，是否有见地、有思辨张力，拒绝泛泛而谈。
+3. human_preference (0-100)：真实人类读者好感度，读起来是否有血肉呼吸感，有无机器翻译腔。
+4. radar：五维特征（tone, cadence, lexicon, discourse, anti_ai），分值 0-100。
+5. critique_feedback：客观中立的终审裁决评语。
+
+必须只输出合法 JSON，不要输出任何其他解释文字。
+"""
+
+INDEPENDENT_EVALUATOR_USER_TEMPLATE = """## 目标作者文风指南
+{style_guide}
+
+## 待盲审评估文章 (匿名提交)
+{article_content}
+
+---
+请对照上述文风指南完成独立客观的双盲裁决，输出评分 JSON。
+"""
+
+
+class IndependentEvaluator:
+    """
+    独立第三方双盲终审评测器 (Independent Blind Evaluator):
+    解决 P0-3 "Critic 既当运动员又当裁判 (Evaluator Overfitting)" 缺陷：
+    1. 内部 Critic (Coordinator.critic_agent) 仅负责创作生成循环中的反思、批注与重写引导；
+    2. 终审评测由独立的 IndependentEvaluator 统一执行，且对文章来源匿名 (A/B/C1a/C1b/C2/D 盲审)；
+    3. 评测推断使用 temperature=0.0，杜绝随机波动干扰评测客观性。
+    """
+
+    def __init__(self, llm_config: LLMConfig):
+        self.config = llm_config
+        self.model_provider = ModelProvider(llm_config)
+
+    def evaluate(self, article: str, profile: DeepStyleProfile) -> EvaluationReport:
+        # 1. 规则层计算：去 AI 味得分与八股惩罚分
+        forbidden = profile.qualitative.anti_patterns.forbidden_words if profile and profile.qualitative else None
+        anti_ai_score, ai_penalty, detected_cliches = LexicalEvaluator.evaluate_cliches(
+            article,
+            custom_forbidden=forbidden
+        )
+
+        # 2. 统计语言学拟合度计算 (句长均值 + 方差 + STTR)
+        target_m = profile.quantitative if profile else None
+        rhythm_score, _ = RhythmEvaluator.evaluate_rhythm_fit(article, target_m)
+        target_sttr = target_m.sttr if target_m and target_m.sttr > 0 else 0.70
+        lex_score, _ = LexicalEvaluator.evaluate_lexical_authenticity(article, target_sttr)
+        stylometric_similarity = round(rhythm_score * 0.70 + lex_score * 0.30, 1)
+
+        # 3. 确定性盲审裁决 (temperature=0.0)
+        fidelity = 80.0
+        logic_depth = 85.0
+        human_pref = 80.0
+        feedback = "独立第三方双盲质检完成，文风与论点基本符合基准。"
+        radar = {
+            "语气视角": 80.0,
+            "句式节奏": stylometric_similarity,
+            "用词口癖": 80.0,
+            "篇章逻辑": 85.0,
+            "去AI味": anti_ai_score,
+        }
+
+        try:
+            raw_judge = self._call_judge(article, profile)
+            parsed = self._extract_json(raw_judge)
+            fidelity = float(parsed.get("style_fidelity", fidelity))
+            logic_depth = float(parsed.get("logic_depth", logic_depth))
+            human_pref = float(parsed.get("human_preference", human_pref))
+
+            if "radar" in parsed and isinstance(parsed["radar"], dict):
+                r = parsed["radar"]
+                radar = {
+                    "语气视角": float(r.get("tone", fidelity)),
+                    "句式节奏": stylometric_similarity,
+                    "用词口癖": float(r.get("lexicon", fidelity)),
+                    "篇章逻辑": float(r.get("discourse", logic_depth)),
+                    "去AI味": anti_ai_score,
+                }
+            feedback = parsed.get("critique_feedback", feedback)
+        except Exception as e:
+            feedback = f"规则引擎盲审完成，LLM 裁判评分降级: {e}"
+
+        # 4. 执行工业级标准化加权评分公式
+        weighted_base = (
+            0.35 * fidelity +
+            0.25 * human_pref +
+            0.20 * stylometric_similarity +
+            0.20 * logic_depth
+        )
+        final_score = max(0.0, min(100.0, round(weighted_base - ai_penalty, 1)))
+
+        return EvaluationReport(
+            overall_score=final_score,
+            style_fidelity=round(fidelity, 1),
+            llm_judge_score=round(human_pref, 1),
+            stylometric_similarity=stylometric_similarity,
+            logic_depth=round(logic_depth, 1),
+            anti_ai_score=round(anti_ai_score, 1),
+            ai_penalty=ai_penalty,
+            radar_metrics=radar,
+            detected_cliches=detected_cliches,
+            feedback=feedback,
+        )
+
+    def _call_judge(self, article: str, profile: DeepStyleProfile) -> str:
+        user_prompt = INDEPENDENT_EVALUATOR_USER_TEMPLATE.format(
+            style_guide=profile.to_system_prompt(),
+            article_content=article
+        )
+        return self.model_provider.chat_completion(
+            system_prompt=INDEPENDENT_EVALUATOR_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.0,  # 确定性裁判推断，杜绝随机波动
+            json_mode=True
+        )
+
+    def _extract_json(self, text: str) -> dict:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\n", "", text)
+            text = re.sub(r"\n```$", "", text)
+        return json.loads(text)
+

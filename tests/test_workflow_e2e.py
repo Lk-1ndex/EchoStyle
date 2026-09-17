@@ -232,12 +232,71 @@ def test_coordinator_real_network_integration():
     config.llm.base_url = base_url
     coordinator = CoordinatorAgent(config)
 
+    profile = DeepStyleProfile(
+        name="RealNetworkIntegrationProfile",
+        qualitative=StyleProfile(
+            name="在线集成文风",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白犀利", persona_traits=["深刻洞察"]),
+            cadence_syntax=CadenceSyntax(sentence_style="短句有力", paragraph_habit="紧凑递进", punctuation_habits=["叹号"]),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活化", vocabulary_richness="丰富"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns(forbidden_words=["总而言之", "不可否认"])
+        )
+    )
+
     state = AgentState(
         topic="真实在线网络测试主题：数字时代独立思考的价值",
         key_points="拒绝从众；保持真实；敢于发声",
         word_count=500,
     )
-    draft, report, final_state = coordinator.run(state=state)
+    draft, report, final_state = coordinator.run(state=state, profile=profile)
     assert len(draft) > 0
     assert final_state.current_status in [AgentStatus.COMPLETED, AgentStatus.COMPLETED_WITH_WARNING]
+
+
+def test_coordinator_network_integration_flow_with_mocked_network():
+    """验证即使在无外部公网 API 的测试环境下，注入 Profile 后的在线网络集成流程闭环，不发生未传 profile 的 ValueError"""
+    from unittest.mock import patch
+    from src.core.config import AppConfig
+
+    config = AppConfig()
+    config.llm.api_key = "mock-api-key-for-unit-test"
+    coordinator = CoordinatorAgent(config)
+
+    profile = DeepStyleProfile(
+        name="MockNetworkIntegrationProfile",
+        qualitative=StyleProfile(
+            name="模拟文风",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白犀利"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句有力", paragraph_habit="紧凑递进"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活化", vocabulary_richness="丰富"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns(forbidden_words=["总而言之"])
+        )
+    )
+
+    state = AgentState(
+        topic="网络流程模拟测试：技术与人性",
+        key_points="保持理性；拒绝盲从",
+        word_count=500,
+    )
+
+    mock_article = "说白了，技术的发展不应当让人性退化。我们必须保持独立清醒的思考。"
+    mock_judge_json = """{
+        "style_fidelity": 88.0,
+        "logic_depth": 85.0,
+        "human_preference": 90.0,
+        "radar": {"tone": 88.0, "lexicon": 88.0, "discourse": 85.0},
+        "critique_feedback": "通过验收"
+    }"""
+
+    with patch.object(coordinator.writer_agent.model_provider, "chat_completion", return_value=mock_article):
+        with patch.object(coordinator.critic_agent.judge.model_provider, "chat_completion", return_value=mock_judge_json):
+            draft, report, final_state = coordinator.run(state=state, profile=profile)
+
+            assert len(draft) > 0
+            assert draft == mock_article
+            assert report.overall_score >= 80.0
+            assert final_state.current_status == AgentStatus.COMPLETED
+
 

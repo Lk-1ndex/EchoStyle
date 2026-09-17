@@ -1,4 +1,4 @@
-# EchoStyle 3.2 (基于多智能体FSM、5组严谨消融、20篇渐近收敛与模块化科学评测的个人文风建模系统)
+# EchoStyle 3.2 (基于多智能体FSM、6组严格单变量消融、20篇渐近收敛与模块化科学评测的个人文风建模系统)
 
 从历史原创文章（微信公众号、Word、PDF）中自适应感知提取语料，结合 **统计语言学客观指纹 (Stylometrics, STTR, 节奏偏离度)** 与 **大模型语义深度解构** 建立高保真深层文风档案，依托 **Style-Aware Hybrid Memory (RRF 混合检索与篇章结构定向切片)** 长期积累，并通过 **严格有限状态机 (FSM)、快照回滚机制与多轮自审重构闭环 (Self-Reflection Loop)** 创作兼具作者呼吸节奏与独立思考质感的全新文章。
 
@@ -6,15 +6,16 @@
 
 ## 🌟 核心架构与科学严谨性演进 (EchoStyle 3.2)
 
-1. **五组严谨消融实验 (5-Condition Matrix)**：
-   - 严格单变量控制隔离 **Style Profile、普通语义 RAG (Dense)、Style-Aware 风格感知 RAG (Structured Hybrid) 与 Critic 自审反思** 四大模块的独立边际贡献：
+1. **严格单变量消融实验套件 (Strict Single-Variable Matrix)**：
+   - 严格单变量控制隔离 **Style Profile、Dense 纯密集语义 RAG、Hybrid RRF 融合检索、Style-Aware 结构过滤与独立盲审 Critic 自审** 各模块的独立边际贡献：
      - `Condition A (Vanilla Base 0)`: 无档案、无检索、无自审的通用基准
      - `Condition B (+Profile Only)`: 显式注入客观语言学统计特征与质感档案
-     - `Condition C1 (+Standard Dense RAG)`: 纯密集语义向量召回（`dense_search`，严格执行 Fail-Closed 阻断，拒绝静默降级）
-     - `Condition C2 (+Style-Aware RAG)`: 基于篇章结构的定向装配检索（`retrieve_dynamic_few_shots` 覆盖 `hook`、`quote`、`argument`）
-     - `Condition D (Full EchoStyle)`: **严格单变量受控**——直接复用 C2 检索快照与 C2 生成初稿 `art_c2`，唯一自变量仅为 Critic 自审与多轮反思重写
-   - **独立正交选题库 (Held-out & Domain-Orthogonal Topics)**：消融评测题目涵盖职场、教育、城市生活、消费、旅行等与训练语料完全解耦的正交题材，杜绝文本内容泄漏与近似原句召回，纯粹检验文风迁移质感。
-   - **客观实测事实与多目标权衡反思**：在当前 EchoScore 预设目标下，普通纯密集 RAG (C1) 与 Style-Aware RAG (C2) 展现出明确的权衡：C2 在宏观篇章拟合 (Discourse) 上取得显著优势，但短金句与论据的异构拼接引发句长节奏偏离 (Rhythm 波动)。Full EchoStyle (D) 凭借 Critic 自审反思闭环清除了潜在违规套话，保障成文质感与安全底线。
+     - `Condition C1a (+Dense RAG)`: 纯密集语义向量余弦召回（`dense_search`，严格执行 Fail-Closed 阻断，拒绝静默降级）
+     - `Condition C1b (+Hybrid RRF RAG)`: 密集与稀疏词频倒数排名融合检索（无结构类型过滤，严格单变量隔离 RRF 融合机制）
+     - `Condition C2 (+Style-Aware RAG)`: 基于篇章结构的定向装配检索（`retrieve_dynamic_few_shots` 覆盖 `hook`、`quote`、`argument`，**与 C1b 构成严格单变量对照：C2 - C1b**）
+     - `Condition D (Full EchoStyle)`: **严格单变量受控与评测解耦**——复用 C2 检索快照与 C2 生成初稿 `art_c2`，由内部 Critic 自审重写；**终审由独立第三方盲审评测器 (Independent Evaluator, temperature=0.0) 统一打分，杜绝 Critic 既当运动员又当裁判的 Evaluator Overfitting**
+   - **领域正交独立选题库 (Domain-Orthogonal Held-out Topics)**：消融评测题目涵盖职场、教育、城市生活、消费、旅行等跨领域题材，提示词仅保留纯客观任务与论述约束，彻底剥离风格特征词（无"犀利"、"体温"、"偏见"等提示），杜绝 Style Leakage。
+   - **分层方差建模与独立盲审 (Hierarchical Clustered Statistics)**：严格区分 Topic 间宏观变异与重复采样扰动，采用 Student-t 分布计算 95% 置信区间，客观呈现系统多目标权衡。
 
 2. **20 篇样本规模 Monte Carlo 子集重抽样收敛实验 (Monte Carlo Subsampling Scaling Experiment)**：
    - 彻底打破“仅固定截取前 N 篇样本”的序列偏差质疑，引入 **50 组 Monte Carlo 无放回随机子集重抽样 (Repeated Random Subsampling)** 评估 1 篇、3 篇、5 篇、10 篇与 20 篇样本梯度。
@@ -55,7 +56,7 @@
    - 正视工程落地边界，归纳并给出架构级解决方案：
      - **CASE-01 跨领域题材冲突**：题材冲突侦测守卫与修辞平抑
      - **CASE-02 冷启动样本匮乏**：语料字数准入门槛与纯统计降级
-     - **CASE-03 过度自审导致平庸化**：FSM 快照回滚保底机制 (`rollback_to('best_version')`)，已全面接入 Coordinator
+     - **CASE-03 过度自审导致平庸化**：FSM 快照回滚保底机制 (`rollback_to('best_version')`，仅在超越历史最高分时更新快照)，已全面接入 Coordinator
 
 9. **高度模块化评测架构 (`src/evaluation/`)**：
    - 彻底解耦巨型单体文件，拆分为 `lexical_metrics.py`、`rhythm_metrics.py`、`discourse_metrics.py`、`composite_eval.py`、`judge.py` 与兼容门面 `metrics.py`。
@@ -64,19 +65,23 @@
 
 ## 📊 科学评测与实验基准矩阵
 
-### 1. 五组严谨消融实验实测矩阵 (5-Condition Matrix)
+### 1. 严格单变量消融实验套件与流程验证 (Ablation Study: Strict Single-Variable Matrix)
 
-#### A. 稳态多主题重复采样矩阵 (5 Topics × 5 Repeats = 25 Runs / Condition)
+#### A. 5×5 仿真流程验证矩阵 (5×5 Simulation Pipeline Verification — NOT Benchmark Result)
 
-| 消融条件 | Style Profile | 普通语义 RAG | 风格感知 RAG | Critic 自审 | 篇章拟合 (Discourse) | 节奏吻合 (Rhythm) | 用词质感 (Lexical) | 八股惩罚 | 统一目标 EchoScore (Mean ± Std) | 95% 置信区间 | 独立边际贡献与机制权衡 |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **A (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | 82.7 | 91.0 | 93.1 | -2.0 | **79.0 ± 1.1** | [78.6, 79.5] | 通用大模型零干预基准 |
-| **B (+Profile Only)** | ✅ | ❌ | ❌ | ❌ | 90.1 | 73.3 | 92.2 | -0.0 | **87.4 ± 1.1** | [87.0, 87.9] | **+8.4 分** (显式注入句法均值/方差与人设约束) |
-| **C1 (+Standard Dense RAG)**| ✅ | ✅ | ❌ | ❌ | 94.7 | 99.0 | 94.9 | -0.0 | **93.4 ± 1.0** | [93.0, 93.8] | **+6.0 分** (密集语义召回连续语料段落，节奏高度平滑) |
-| **C2 (+Style-Aware RAG)**| ✅ | ❌ | ✅ | ❌ | 96.6 | 84.0 | 95.0 | -0.0 | **89.5 ± 1.0** | [89.1, 89.9] | **-3.9 分** (篇章拟合最优，但金句与论据异构拼接打乱句长节奏) |
-| **D (Full EchoStyle)**| ✅ | ❌ | ✅ | ✅ | 97.4 | 80.4 | 95.2 | -0.0 | **89.3 ± 1.0** | [88.9, 89.7] | **严格以 C2 初稿复用** (Critic 清除八股违规，保障成品安全底线) |
+> ⚠️ **免责声明与模式标记 (MOCK / SIMULATION PIPELINE VERIFICATION — NOT BENCHMARK RESULT)**：  
+> 仓库当前已实现 5 topics × 5 repeats 自动化消融评估流水线，但尚未完成全量真实在线 LLM 的 25 轮并发实测。下表数据由离线分层统计桩 (Simulation Pipeline) 跑通生成，用于工程流程验证与多维指标统计框架测试，**绝不可视作最终实测 Benchmark 性能结论**。真实实测结果需配置有效 API Key 执行 `python main.py benchmark --ablation` 后生成归档于 `reports/ablation_study_report.md`。
 
-> 📌 **单次探索性摸底数据对照 (Single-Run Preliminary Result, 1 Topic × 1 Run)**：
+| 消融条件 | Profile | Dense检索 | Hybrid RRF | 结构过滤 | Critic重写 | 独立盲审 | 篇章拟合 | 节奏吻合 | 用词质感 | 八股惩罚 | 跨主题均值 (Mean ± Std) | 95% 置信区间 (Student-t) | 严格单变量边际贡献与机制权衡 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **A (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 82.8 | 91.0 | 93.1 | -2.0 | **79.0 ± 0.8** | [78.1, 80.0] | 通用大模型零干预基准 |
+| **B (+Profile Only)** | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | 90.1 | 73.3 | 92.2 | -0.0 | **87.4 ± 0.7** | [86.5, 88.3] | **+8.4 分** (显式注入句法均值/方差与人设约束) |
+| **C1a (+Dense RAG)**| ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | 94.7 | 99.0 | 94.9 | -0.0 | **93.4 ± 0.5** | [92.8, 94.0] | **+5.9 分 (相对 B)**: 密集语义召回连续语料段落，节奏高度平滑 |
+| **C1b (+Hybrid RRF RAG)**| ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | 95.4 | 93.7 | 95.0 | -0.0 | **92.0 ± 0.5** | [91.4, 92.7] | **-1.4 分 (相对 C1a)**: 词频 RRF 召回稀疏词，增强词汇命中但稍微扰动纯密集连续性 |
+| **C2 (+Style-Aware RAG)**| ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | 96.6 | 84.0 | 95.0 | -0.0 | **89.5 ± 0.5** | [88.9, 90.1] | **-2.5 分 (相对 C1b 严格单变量)**: 篇章拟合最优(+1.2)，但金句与论据异构拼接打乱句长节奏 |
+| **D (Full EchoStyle)**| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 97.4 | 80.4 | 95.2 | -0.0 | **89.3 ± 0.4** | [88.8, 89.8] | **-0.2 分 (相对 C2 严格单变量)**: 内部 Critic 自审清除八股违规，由独立第三方盲审裁决 |
+
+> 📌 **单次探索性摸底数据对照 (Single-Run Preliminary Result, 1 Topic × 1 Run)**：  
 > 前期单次摸底数据为 A: 80.5, B: 88.8, C1: 87.8, C2: 83.9, D: 87.8 (+3.9)。因单次运行无法消除大模型生成与采样的偶然性噪声 (Std = 0.0，95% CI 退化为单点)，仅作为早期的单点探索记录，不作为最终稳态 benchmark 结论。
 
 
@@ -178,7 +183,7 @@ python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什�
 ```bash
 uv run pytest
 ```
-所有 **37 个单元与集成测试用例均自动化校验通过 (36 passed, 1 skipped 用于隔离真实外连网络)**。
+所有 **全量单元与集成测试用例均自动化校验通过 (44+ passed, 1 skipped 用于隔离真实外连网络)**。
 
 - **持续集成 (GitHub Actions)**：CI 工作流已正式部署于 [`.github/workflows/pytest.yml`](.github/workflows/pytest.yml)。
   > *注：若通过 GitHub CLI 或 PAT 提交工作流文件触发权限拦截（`refusing to allow a Personal Access Token to create or update workflow without workflow scope`），需在 GitHub Developer Settings 中为 Token 开启 `workflow` 作用域，或通过 GitHub Web 页面提交合并。*
@@ -204,12 +209,12 @@ EchoStyle/
 │   │   └── metrics.py             # 兼容统一门面 (Facade)
 │   └── web/           # Streamlit 可视化工作台
 ├── experiments/       # 科学实验与评测基准套件
-│   ├── ablation_study.py    # 5 组严谨消融实验 (5-Condition Matrix)
+│   ├── ablation_study.py    # 6 组严格单变量消融实验 (6-Condition Matrix)
 │   ├── scaling_study.py     # 20 篇样本规模渐近收敛实验 (MSE Curve)
 │   ├── failure_analysis.py  # 失败案例与系统边界深度剖析
 │   ├── blind_benchmark.py   # 规范化双盲评测套件
 │   └── ab_benchmark.py      # 三方 A/B 对照基准
-├── tests/             # 单元与集成测试套件 (29/29 tests passing)
+├── tests/             # 单元与集成测试套件 (44+ passed)
 ├── profiles/          # 文风档案、记忆切片与 Benchmark 评测报告 (Markdown / JSON)
 ├── benchmark.py       # 基准测试执行脚本
 ├── main.py            # CLI 命令行调度入口
