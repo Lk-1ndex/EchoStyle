@@ -6,9 +6,18 @@ llm:
   temperature: 0.7
   max_tokens: 4096
 
+# 独立 Holdout 评测裁判配置 (留空则默认复用 llm 配置，但独立实例化并使用 temperature=0.0 进行流程隔离；支持不同模型如 claude / gpt-4o 实现跨模型盲审)
+evaluator:
+  api_key: ""
+  base_url: ""
+  model: ""
+  temperature: 0.0
+  max_tokens: 4096
+
 # 解析与清洗配置
 extractor:
   pdf_engine: "markitdown"  # 可选: "markitdown" (极速标准模式) 或 "mineru" (深度视觉模式)
   mineru_command: "magic-pdf"
   clean_noise: true
   repair_linebreaks: true
+

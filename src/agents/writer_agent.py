@@ -37,7 +37,7 @@ class WriterAgent(BaseAgent):
     def run(
         self,
         state: AgentState,
-        profile: DeepStyleProfile,
+        profile: Optional[DeepStyleProfile] = None,
         feedback: Optional[str] = None,
         previous_draft: Optional[str] = None,
     ) -> str:
@@ -55,7 +55,7 @@ class WriterAgent(BaseAgent):
         # 2. 区分【首轮创作】还是【反思重写】
         if feedback and previous_draft:
             state.transition_to(AgentStatus.REFLECTING, f"执行第 {state.retry_count} 轮反思重构...")
-            avg_len = profile.quantitative.avg_sentence_length if profile.quantitative else 20.0
+            avg_len = profile.quantitative.avg_sentence_length if (profile and profile.quantitative and profile.quantitative.avg_sentence_length > 0) else 20.0
             task_mode = "rewrite"
             raw_user_prompt = REWRITE_PROMPT_TEMPLATE.format(
                 draft=previous_draft,
@@ -78,10 +78,11 @@ class WriterAgent(BaseAgent):
         # 3. 任务感知 Token 预算装配 (Task-Aware Token Budgeting & 自适应重构增配)
         system_persona = (
             f"你是一位拥有鲜明风格的写作者，人设特征：{', '.join(profile.qualitative.tone_persona.persona_traits)}"
-            if profile.qualitative and profile.qualitative.tone_persona
+            if (profile and profile.qualitative and profile.qualitative.tone_persona and profile.qualitative.tone_persona.persona_traits)
             else "你是一位具备独立思考质感的写作者"
         )
-        style_dna = profile.to_system_prompt(dynamic_few_shots=[])
+        style_dna = profile.to_system_prompt(dynamic_few_shots=[]) if profile else ""
+
         system_prompt, budgeted_user_prompt = self.model_provider.assemble_budgeted_prompt(
             system_persona=system_persona,
             style_dna=style_dna,

@@ -207,11 +207,10 @@ def test_hybrid_search_unembedded_chunks_do_not_receive_dense_rank():
         store_file = Path(tmp_dir) / "unembedded_dense_rank_store.json"
         store = VectorStore(storage_path=str(store_file))
 
-        # doc_1 具有向量，doc_2 没有向量 (embedding: None)
-        # 且 doc_2 的文本与 query 不重叠，doc_1 与 query 也不重叠
+        # doc_1 具有向量，但文本与 query 无交集；doc_2 没有向量 (embedding: None)，但文本与 query 有交集
         store.chunks = [
             {"id": "doc_1", "content": "无关内容甲", "embedding": [1.0, 0.0], "metadata": {}},
-            {"id": "doc_2", "content": "无关内容乙", "embedding": None, "metadata": {}},
+            {"id": "doc_2", "content": "测试查询相关内容乙", "embedding": None, "metadata": {}},
         ]
 
         # 模拟 query 向量偏向 doc_1
@@ -224,12 +223,68 @@ def test_hybrid_search_unembedded_chunks_do_not_receive_dense_rank():
             assert "doc_1" in res_dict
             assert "doc_2" in res_dict
 
-            # 验证 doc_1 的 RRF 分数包含双通道贡献 (dense + sparse ≈ 0.0328)
-            assert res_dict["doc_1"]["rrf_score"] > 0.030
-            # 验证 doc_2 因缺少向量只获得单通道 sparse 贡献 (≈ 0.0161)，绝未叠加 1/(60+2) 的错误 dense 加分 (若叠加则会超过 0.030)
-            assert res_dict["doc_2"]["rrf_score"] < 0.020
-            expected_sparse_only = round(1.0 / (60 + 2), 6)
-            assert abs(res_dict["doc_2"]["rrf_score"] - expected_sparse_only) < 1e-4
+            # doc_1 获得单通道 dense 贡献 (≈ 0.016393)，文本无交集因此无 sparse 贡献
+            assert abs(res_dict["doc_1"]["rrf_score"] - round(1.0 / (60 + 1), 6)) < 1e-4
+            # doc_2 因缺少向量只获得单通道 sparse 贡献 (≈ 0.016393)，绝未叠加 dense 加分
+            assert abs(res_dict["doc_2"]["rrf_score"] - round(1.0 / (60 + 1), 6)) < 1e-4
+
+
+def test_rrf_zero_similarity_no_sparse_rank_or_insertion_bias():
+    """验证 P0 缺陷修复：零词汇交集文档绝不获得 Sparse 排名，且绝不通过填充 top_k 凭入库顺序混入检索结果"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "zero_sim_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        # 入库 3 篇文档，前两篇入库更早但与 query 完全无词汇交集
+        chunks = [
+            {"id": "doc_early_1", "content": "太阳从东边升起，西边落下。", "source": "A"},
+            {"id": "doc_early_2", "content": "今天在公园散步，天气非常晴朗。", "source": "B"},
+            {"id": "doc_matched", "content": "深度学习大模型文风迁移与智能写作技术。", "source": "C"},
+        ]
+        store.add_chunks(chunks)
+
+        # 纯稀疏/混合检索 (无向量时退化为单通道稀疏)
+        results = store.hybrid_search("深度学习大模型", top_k=3, require_dense=False)
+        result_ids = [r["id"] for r in results]
+
+        # 核心断言 1：只有具有真实正向相关性的文档被召回 (len 为 1，绝不硬凑 top_k 3 个)
+        assert len(results) == 1
+        assert results[0]["id"] == "doc_matched"
+        assert results[0]["rrf_score"] > 0.016
+
+        # 核心断言 2：doc_early_1 和 doc_early_2 与 query 完全无交集，其实际 sparse score = 0，
+        # 绝不能因为入库顺序更早而获得排名，更严禁混入检索结果中！
+        assert "doc_early_1" not in result_ids
+        assert "doc_early_2" not in result_ids
+
+
+def test_rrf_insertion_order_invariance_and_top_n_window():
+    """验证 RRF 各通道按有效 Top-N 窗口召回，且彻底消除入库顺序对召回与排序的扰动"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file1 = Path(tmp_dir) / "order1.json"
+        store_file2 = Path(tmp_dir) / "order2.json"
+        s1 = VectorStore(storage_path=str(store_file1))
+        s2 = VectorStore(storage_path=str(store_file2))
+
+        doc_match1 = {"id": "match_1", "content": "深度学习大模型架构设计与优化"}
+        doc_match2 = {"id": "match_2", "content": "深度学习大模型训练策略与实践"}
+        doc_irrelevant1 = {"id": "irr_1", "content": "红烧牛肉面的家常做法与配方"}
+        doc_irrelevant2 = {"id": "irr_2", "content": "周末野外露营烧烤实用技巧指南"}
+
+        # 顺序 1：无关文档在前，相关文档在后
+        s1.add_chunks([doc_irrelevant1, doc_irrelevant2, doc_match1, doc_match2])
+        # 顺序 2：相关文档在前，无关文档在后
+        s2.add_chunks([doc_match2, doc_match1, doc_irrelevant2, doc_irrelevant1])
+
+        res1 = s1.hybrid_search("深度学习大模型", top_k=2, require_dense=False)
+        res2 = s2.hybrid_search("深度学习大模型", top_k=2, require_dense=False)
+
+        # 两者的召回集合与排序应当完全一致，不受插入顺序影响，无关文档均被排除
+        assert [r["id"] for r in res1] == [r["id"] for r in res2]
+        assert "irr_1" not in [r["id"] for r in res1]
+        assert "irr_2" not in [r["id"] for r in res1]
+
+
 
 
 

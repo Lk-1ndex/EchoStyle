@@ -255,9 +255,9 @@ class MultiPersonaJudge:
         }
 
 
-INDEPENDENT_EVALUATOR_SYSTEM_PROMPT = """你是一位独立第三方双盲文风终审评审员与文学审校专家。
-你从未参与任何前序写作引导、修改建议或反思交互过程。
-你的职责是对盲审提交的文章进行完全独立、无偏见、确定性的量化打分。
+INDEPENDENT_EVALUATOR_SYSTEM_PROMPT = """你是一位流程隔离的条件盲审文风终审评审员（Condition-Blind Holdout Evaluator，匿名条件盲审）与文学审校专家。
+你从未参与任何前序写作引导、修改建议或反思交互过程（流程物理隔离）。
+你的职责是对盲审提交的文章进行完全独立、无偏见、低随机性的量化打分。
 
 评测维度说明：
 1. style_fidelity (0-100)：文风神似度，包括人设语气、修辞意象、标志性口头禅是否逼真。
@@ -272,25 +272,29 @@ INDEPENDENT_EVALUATOR_SYSTEM_PROMPT = """你是一位独立第三方双盲文风
 INDEPENDENT_EVALUATOR_USER_TEMPLATE = """## 目标作者文风指南
 {style_guide}
 
-## 待盲审评估文章 (匿名提交)
+## 待盲审评估文章 (匿名提交 / 条件盲化)
 {article_content}
 
 ---
-请对照上述文风指南完成独立客观的双盲裁决，输出评分 JSON。
+请对照上述文风指南完成独立客观的条件盲审裁决，输出评分 JSON。
 """
 
 
 class IndependentEvaluator:
     """
-    独立第三方双盲终审评测器 (Independent Blind Evaluator):
-    解决 P0-3 "Critic 既当运动员又当裁判 (Evaluator Overfitting)" 缺陷：
+    独立条件盲化留出评测器 (Process-Independent & Condition-Blind Holdout Evaluator):
+    解决 P0-3 "Critic 既当运动员又当裁判 (Evaluator Overfitting)" 缺陷与评测隔离：
     1. 内部 Critic (Coordinator.critic_agent) 仅负责创作生成循环中的反思、批注与重写引导；
-    2. 终审评测由独立的 IndependentEvaluator 统一执行，且对文章来源匿名 (A/B/C1a/C1b/C2/D 盲审)；
-    3. 评测推断使用 temperature=0.0，杜绝随机波动干扰评测客观性。
+    2. 终审评测由独立的 IndependentEvaluator 统一执行，且对文章来源匿名 (A0/A1/B/C1a/C1b/C2/D 条件盲审)；
+    3. 支持独立指定 evaluator_model 配置，与生成模型实现物理/实例解耦；
+    4. 评测推断使用 temperature=0.0 以降低采样随机性；
+    5. 支持 strict 模式 (严格 Benchmark 模式)：API 失败或格式解析失败时直接抛出 EvaluationUnavailableError (Fail-Closed)，
+       严禁以硬编码默认好成绩 (80/85/80) 虚拟伪造评测结果！
     """
 
-    def __init__(self, llm_config: LLMConfig):
+    def __init__(self, llm_config: LLMConfig, strict: bool = False):
         self.config = llm_config
+        self.strict = strict
         self.model_provider = ModelProvider(llm_config)
 
     def evaluate(self, article: str, profile: DeepStyleProfile) -> EvaluationReport:
@@ -308,11 +312,11 @@ class IndependentEvaluator:
         lex_score, _ = LexicalEvaluator.evaluate_lexical_authenticity(article, target_sttr)
         stylometric_similarity = round(rhythm_score * 0.70 + lex_score * 0.30, 1)
 
-        # 3. 确定性盲审裁决 (temperature=0.0)
+        # 3. 流程隔离盲审裁决 (temperature=0.0)
         fidelity = 80.0
         logic_depth = 85.0
         human_pref = 80.0
-        feedback = "独立第三方双盲质检完成，文风与论点基本符合基准。"
+        feedback = "独立条件盲审质检完成，文风与论点基本符合基准。"
         radar = {
             "语气视角": 80.0,
             "句式节奏": stylometric_similarity,
@@ -324,9 +328,20 @@ class IndependentEvaluator:
         try:
             raw_judge = self._call_judge(article, profile)
             parsed = self._extract_json(raw_judge)
+            if not isinstance(parsed, dict):
+                raise ValueError(f"裁判返回内容非 JSON 字典: {raw_judge}")
+            if self.strict:
+                for req_key in ["style_fidelity", "logic_depth", "human_preference"]:
+                    if req_key not in parsed:
+                        raise ValueError(f"裁判输出缺失关键评分字段 [{req_key}]: {parsed}")
             fidelity = float(parsed.get("style_fidelity", fidelity))
             logic_depth = float(parsed.get("logic_depth", logic_depth))
             human_pref = float(parsed.get("human_preference", human_pref))
+
+            if self.strict:
+                for name, val in [("style_fidelity", fidelity), ("logic_depth", logic_depth), ("human_preference", human_pref)]:
+                    if not (0.0 <= val <= 100.0):
+                        raise ValueError(f"裁判输出评分超出有效范围 [0-100] ({name}={val}): {parsed}")
 
             if "radar" in parsed and isinstance(parsed["radar"], dict):
                 r = parsed["radar"]
@@ -339,6 +354,11 @@ class IndependentEvaluator:
                 }
             feedback = parsed.get("critique_feedback", feedback)
         except Exception as e:
+            if self.strict:
+                from src.core.exceptions import EvaluationUnavailableError
+                raise EvaluationUnavailableError(
+                    f"独立评测裁判调用或解析失败 (strict Fail-Closed 严控阻断): {e}"
+                ) from e
             feedback = f"规则引擎盲审完成，LLM 裁判评分降级: {e}"
 
         # 4. 执行工业级标准化加权评分公式
@@ -371,14 +391,25 @@ class IndependentEvaluator:
         return self.model_provider.chat_completion(
             system_prompt=INDEPENDENT_EVALUATOR_SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            temperature=0.0,  # 确定性裁判推断，杜绝随机波动
+            temperature=0.0,  # 降低采样随机性
             json_mode=True
         )
 
     def _extract_json(self, text: str) -> dict:
         text = text.strip()
         if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\n", "", text)
-            text = re.sub(r"\n```$", "", text)
-        return json.loads(text)
+            text = re.sub(r"^```(?:json)?\n?", "", text)
+            text = re.sub(r"\n?```$", "", text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                raw_json = match.group(0)
+                try:
+                    return json.loads(raw_json)
+                except json.JSONDecodeError:
+                    cleaned = re.sub(r",\s*([\]}])", r"\1", raw_json)
+                    return json.loads(cleaned)
+            raise
 

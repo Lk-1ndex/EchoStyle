@@ -68,8 +68,8 @@ def test_hierarchical_statistics_calculation():
     assert abs(stat.ci95 - 3.93) <= 0.05
 
 
-def test_independent_evaluator_blind_deterministic_evaluation():
-    """验证 P0-3 缺陷修复：IndependentEvaluator 使用 temperature=0.0 进行确定性双盲终审裁决"""
+def test_independent_evaluator_condition_blind_holdout_evaluation():
+    """验证：IndependentEvaluator 作为 Condition-Blind Holdout Evaluator，使用 temperature=0.0 降低采样随机性进行条件盲化留出裁决"""
     from unittest.mock import MagicMock
     from src.core.config import LLMConfig
     from src.evaluation.judge import IndependentEvaluator
@@ -114,11 +114,12 @@ def test_independent_evaluator_blind_deterministic_evaluation():
 
     assert isinstance(report, EvaluationReport)
     assert report.style_fidelity == 88.0
-    # 核心断言：裁判推断必须使用 temperature=0.0 确定性推断
+    # 核心断言：裁判推断使用 temperature=0.0 降低采样随机性
     assert captured_kwargs.get("temperature") == 0.0
     assert captured_kwargs.get("json_mode") is True
-    # 核心断言：使用独立盲审 Prompt
-    assert "双盲" in captured_kwargs.get("system_prompt", "")
+    # 核心断言：使用条件盲审 Prompt
+    sys_prompt = captured_kwargs.get("system_prompt", "")
+    assert "Condition-Blind" in sys_prompt or "条件盲审" in sys_prompt
 
 
 def test_memory_manager_retrieve_hybrid_without_type_filter():
@@ -146,7 +147,7 @@ def test_memory_manager_retrieve_hybrid_without_type_filter():
 
 
 def test_run_ablation_study_simulation_pipeline_end_to_end():
-    """验证消融实验离线模拟流水线端到端执行与自定义报告路径输出"""
+    """验证 7 组消融实验离线模拟流水线端到端执行与自定义报告路径输出"""
     import tempfile
     from pathlib import Path
     from experiments.ablation_study import run_ablation_study
@@ -164,10 +165,117 @@ def test_run_ablation_study_simulation_pipeline_end_to_end():
         assert custom_report.exists()
         content = custom_report.read_text(encoding="utf-8")
         assert "SIMULATION MODE / NOT A REAL BENCHMARK" in content
-        assert "A (Vanilla Base)" in content
+        assert "A0 (Vanilla Base)" in content
+        assert "A1 (Scaffolding Base)" in content
+        assert "B (+Profile Only)" in content
         assert "C1a (+Dense RAG)" in content
         assert "C1b (+Hybrid RRF RAG)" in content
         assert "C2 (+Style-Aware RAG)" in content
         assert "D (Full EchoStyle)" in content
+        # 验证仿真模式不输出科学结论断言，而是流程验证措辞
+        assert "仿真数据用于验证分析管道能够识别以下差异" in content
+
+
+def test_independent_evaluator_strict_fail_closed_on_failure():
+    """验证 P0-3 缺陷修复：IndependentEvaluator 在 strict=True 时坚决 Fail-Closed，拒绝以 80/85/80 默认虚拟分污染基准"""
+    import pytest
+    from unittest.mock import MagicMock
+    from src.core.config import LLMConfig
+    from src.evaluation.judge import IndependentEvaluator
+    from src.core.exceptions import EvaluationUnavailableError
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns
+    )
+
+    llm_conf = LLMConfig()
+    profile = DeepStyleProfile(
+        name="测试",
+        qualitative=StyleProfile(
+            name="测试",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活化", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns(forbidden_words=["不可否认"])
+        )
+    )
+
+
+    # 1. strict=True 场景：大模型调用超时或抛出异常，必须抛出 EvaluationUnavailableError 阻断
+    strict_evaluator = IndependentEvaluator(llm_conf, strict=True)
+    strict_evaluator.model_provider.chat_completion = MagicMock(side_effect=TimeoutError("API Connection timed out"))
+
+    with pytest.raises(EvaluationUnavailableError) as exc_info:
+        strict_evaluator.evaluate("这是待审文章", profile)
+    assert "Fail-Closed" in str(exc_info.value)
+    assert "timed out" in str(exc_info.value)
+
+    # 2. strict=True 场景：返回内容 JSON 解析错误或缺失关键字段
+    strict_evaluator.model_provider.chat_completion = MagicMock(return_value="bad non json output")
+    with pytest.raises(EvaluationUnavailableError) as exc_info:
+        strict_evaluator.evaluate("这是待审文章", profile)
+    assert "Fail-Closed" in str(exc_info.value)
+
+    strict_evaluator.model_provider.chat_completion = MagicMock(return_value='{"score": 90}')
+    with pytest.raises(EvaluationUnavailableError) as exc_info:
+        strict_evaluator.evaluate("这是待审文章", profile)
+    assert "缺失关键评分字段" in str(exc_info.value)
+
+    # 3. strict=True 场景：评分超限 [0-100] 必须 Fail-Closed
+    strict_evaluator.model_provider.chat_completion = MagicMock(
+        return_value='{"style_fidelity": 150.0, "logic_depth": 85.0, "human_preference": 80.0}'
+    )
+    with pytest.raises(EvaluationUnavailableError) as exc_info:
+        strict_evaluator.evaluate("这是待审文章", profile)
+    assert "超出有效范围" in str(exc_info.value)
+
+    # 4. strict=False 宽松模式（生产 UI 体验）：允许优雅降级为规则引擎质检，不抛出阻断异常
+    loose_evaluator = IndependentEvaluator(llm_conf, strict=False)
+    loose_evaluator.model_provider.chat_completion = MagicMock(side_effect=RuntimeError("503 Service Unavailable"))
+    report = loose_evaluator.evaluate("这是待审文章", profile)
+    assert report is not None
+    assert "评分降级" in report.feedback
+
+
+def test_ablation_study_evaluate_condition_run_retries_and_excludes_on_failure():
+    """验证 Benchmark 模式下评测失败带重试，重试耗尽后返回 None（排除样本，绝不填 80/85/80 默认虚拟分）"""
+    from unittest.mock import MagicMock
+    from src.core.config import LLMConfig
+    from src.evaluation.judge import IndependentEvaluator
+    from src.analyzer.stylometrics import StylometricsAnalyzer
+    from experiments.ablation_study import _evaluate_condition_run
+    from src.core.models import (
+        DeepStyleProfile, StyleProfile, TonePersona, CadenceSyntax,
+        LexiconRhetoric, DiscourseArchitecture, AntiPatterns
+    )
+
+    llm_conf = LLMConfig()
+    profile = DeepStyleProfile(
+        name="测试",
+        qualitative=StyleProfile(
+            name="测试",
+            tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
+            cadence_syntax=CadenceSyntax(sentence_style="短句", paragraph_habit="紧凑"),
+            lexicon_rhetoric=LexiconRhetoric(catchphrases=["说白了"], metaphor_style="生活化", vocabulary_richness="通俗"),
+            discourse=DiscourseArchitecture(opening_hook="破空设问", body_progression="层层递进", ending_style="金句收尾"),
+            anti_patterns=AntiPatterns(forbidden_words=["不可否认"])
+        )
+    )
+    metrics = StylometricsAnalyzer.analyze("样文基准测试")
+
+    strict_evaluator = IndependentEvaluator(llm_conf, strict=True)
+    # 模拟 API 彻底挂掉（多次重试均超时）
+    strict_evaluator.model_provider.chat_completion = MagicMock(side_effect=TimeoutError("Connection timed out"))
+
+    # 执行带重试评估
+    res = _evaluate_condition_run(strict_evaluator, "待测文章", profile, metrics, max_retries=1)
+
+    # 核心断言：失败后返回 None（样本被直接排除），绝不生成伪造的 80/85/80 默认分
+    assert res is None
+    # 验证确实执行了重试 (1 次初始 + 1 次重试 = 2 次调用)
+    assert strict_evaluator.model_provider.chat_completion.call_count == 2
+
+
 
 

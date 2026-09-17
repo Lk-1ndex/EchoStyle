@@ -170,6 +170,8 @@ class VectorStore:
                     "严格基准对照模式下拒绝退化为纯稀疏排序 (Fail-Closed)！"
                 )
 
+        # 各通道仅保留 top_N 有效正相关结果 (标准 RRF 窗口机制，避免给整个语料库或零相关文档强行赋予全局排名)
+        rank_window = max(top_k * 3, 20)
         dense_ranks: Dict[str, int] = {}
         if query_dense and has_chunk_embs:
             dense_scores = []
@@ -177,45 +179,59 @@ class VectorStore:
                 emb = c.get("embedding")
                 if emb is not None:
                     score = self._cosine_similarity(query_dense, emb, chunk_id=c.get("id"))
-                    dense_scores.append((score, c["id"]))
-            # 按相似度降序排序，赋予绝对排名 (1-indexed)
-            dense_scores.sort(key=lambda x: x[0], reverse=True)
-            for rank_idx, (_, cid) in enumerate(dense_scores, start=1):
+                    if score > 0:
+                        dense_scores.append((score, c["id"]))
+            # 按相似度降序排序（得分相同时按 ID 升序确定性破平，杜绝入库顺序偏差），仅截取有效 top_N 赋予绝对排名 (1-indexed)
+            dense_scores.sort(key=lambda x: (-x[0], str(x[1])))
+            for rank_idx, (_, cid) in enumerate(dense_scores[:rank_window], start=1):
                 dense_ranks[cid] = rank_idx
 
-
         # 2. 稀疏词汇检索通道 (Sparse Retrieval - Token Overlap / BM25 变体)
+        # 严格过滤 score > 0 的有效文档，仅截取 top_N 赋予稀疏绝对排名
         query_tokens = self._tokenize(query)
         sparse_scores = []
         for c in candidates:
             c_tokens = self._tokenize(c["content"])
             score = self._sparse_similarity(query_tokens, c_tokens)
-            sparse_scores.append((score, c["id"]))
-        # 按稀疏分数降序排序，赋予绝对排名
-        sparse_scores.sort(key=lambda x: x[0], reverse=True)
+            if score > 0:
+                sparse_scores.append((score, c["id"]))
+        # 按稀疏分数降序排序（得分相同时按 ID 升序确定性破平，杜绝入库顺序偏差），仅截取有效 top_N 赋予绝对排名
+        sparse_scores.sort(key=lambda x: (-x[0], str(x[1])))
         sparse_ranks: Dict[str, int] = {}
-        for rank_idx, (_, cid) in enumerate(sparse_scores, start=1):
+        for rank_idx, (_, cid) in enumerate(sparse_scores[:rank_window], start=1):
             sparse_ranks[cid] = rank_idx
 
         # 3. 执行 RRF 排名倒数融合计算
+        # 仅对在至少一个检索通道进入 top_N 有效候选集的切片执行 RRF 融合计算
+        # 零相关文档与未入围文档绝对不参与 RRF 融合，更绝不进入最终召回列表，彻底根除入库顺序偏差 (Insertion-Order Bias)
+        candidate_cids = set(dense_ranks.keys()) | set(sparse_ranks.keys())
+        if not candidate_cids:
+            return []
+
+        cid_to_chunk = {c["id"]: c for c in candidates}
         rrf_scores: List[Tuple[float, Dict[str, Any]]] = []
-        for c in candidates:
-            cid = c["id"]
+        for cid in candidate_cids:
+            c = cid_to_chunk.get(cid)
+            if not c:
+                continue
             dense_rank = dense_ranks.get(cid)
-            sparse_rank = sparse_ranks.get(cid, len(candidates) + 1)
+            sparse_rank = sparse_ranks.get(cid)
 
             # 标准公式: 1 / (60 + rank_dense) + 1 / (60 + rank_sparse)
             rrf_val = 0.0
             if dense_rank is not None:
                 rrf_val += 1.0 / (self.RRF_K + dense_rank)
-            rrf_val += 1.0 / (self.RRF_K + sparse_rank)
+            if sparse_rank is not None:
+                rrf_val += 1.0 / (self.RRF_K + sparse_rank)
 
-            c["rrf_score"] = round(rrf_val, 6)
-            rrf_scores.append((rrf_val, c))
+            item = dict(c)
+            item["rrf_score"] = round(rrf_val, 6)
+            rrf_scores.append((rrf_val, item))
 
-        # 按 RRF 得分从高到低排列
-        rrf_scores.sort(key=lambda x: x[0], reverse=True)
+        # 按 RRF 得分降序排列，得分相同者按 id 确定性升序排序（彻底根除依赖列表入库顺序造成的隐式偏置）
+        rrf_scores.sort(key=lambda x: (-x[0], str(x[1].get("id", ""))))
         return [c for score, c in rrf_scores[:top_k]]
+
 
     def search(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         return self.hybrid_search(query, top_k=top_k)
@@ -260,9 +276,19 @@ class VectorStore:
     def _tokenize(text: str) -> Dict[str, int]:
         text = text.lower().strip()
         tokens: Dict[str, int] = {}
-        words = re.findall(r"[\u4e00-\u9fa5]{1,2}|[a-zA-Z0-9]+", text)
-        for w in words:
+        # 英文与数字单词
+        for w in re.findall(r"[a-zA-Z0-9]+", text):
             tokens[w] = tokens.get(w, 0) + 1
+        # 中文短语提取（按标点符号断句，避免跨句生成无效 bigram）
+        cn_phrases = re.findall(r"[\u4e00-\u9fa5]+", text)
+        for phrase in cn_phrases:
+            # 1-gram 单字
+            for ch in phrase:
+                tokens[ch] = tokens.get(ch, 0) + 1
+            # 2-gram 重叠二元字组 (解决非重叠分词的奇偶移位漏词缺陷)
+            for i in range(len(phrase) - 1):
+                bg = phrase[i : i + 2]
+                tokens[bg] = tokens.get(bg, 0) + 1
         return tokens
 
     @staticmethod

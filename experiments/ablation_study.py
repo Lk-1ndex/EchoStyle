@@ -209,9 +209,10 @@ def _calc_hierarchical_stats(topic_runs: List[List[float]]) -> HierarchicalStat:
     )
 
 
-def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]]) -> str:
-    """依据真实运行分层统计数据动态生成多目标权衡与客观归因，坚决拒绝结论先行与静态断言"""
-    a_echo, a_echo_std, _ = summary["A"]["echo"][:3]
+def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]], is_simulation: bool = False) -> str:
+    """依据分层统计数据生成多目标权衡分析；在仿真模式下严格采用流程验证措辞，拒绝将桩数据表述为实测结论"""
+    a0_echo, a0_echo_std, _ = summary["A0"]["echo"][:3]
+    a1_echo, a1_echo_std, _ = summary["A1"]["echo"][:3]
     b_echo, b_echo_std, _ = summary["B"]["echo"][:3]
     c1a_echo, c1a_echo_std, _ = summary["C1a"]["echo"][:3]
     c1b_echo, c1b_echo_std, _ = summary["C1b"]["echo"][:3]
@@ -231,71 +232,105 @@ def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]]
     c2_pen = summary["C2"]["penalty"][0]
     d_pen = summary["D"]["penalty"][0]
 
-    # 1. 严格单变量消融核心结论判定 (C1a -> C1b -> C2 -> D)
+    # 1. 严格单变量消融核心步进收益 (A0 -> A1 -> B -> C1a -> C1b -> C2 -> D)
+    scaffolding_gain = a1_echo - a0_echo
+    profile_gain = b_echo - a1_echo        # 严格单变量：控制 Scaffolding 一致后 Profile 净贡献
+    dense_gain = c1a_echo - b_echo
     rrf_gain = c1b_echo - c1a_echo
-    style_filter_gain = c2_echo - c1b_echo
+    style_filter_gain = c2_echo - c1b_echo  # 严格单变量：C2 - C1b 隔离结构过滤
     critic_gain = d_echo - c2_echo
 
-    verdict_lines = [
-        f"- **Dense 语义检索基线 (C1a)**: 得分 {c1a_echo:.1f} ± {c1a_echo_std:.1f}，在段落连续性与句长节奏吻合度 (Rhythm: {c1a_rhy:.1f}) 维度表现优异；",
-        f"- **Sparse/RRF 融合边际效应 (C1b - C1a)**: 增量为 {rrf_gain:+.1f} 分，验证了在无结构过滤条件下单纯引入词频融合的机制贡献；",
-        f"- **Style-Aware 结构过滤独立效应 (C2 - C1b)**: 增量为 {style_filter_gain:+.1f} 分（**严格控制 RRF 变量后的净贡献**）；",
-        f"- **Critic 闭环反思净增益 (D - C2)**: 增量为 {critic_gain:+.1f} 分（由未参与重写的 Independent Evaluator 进行确定性盲审裁决）。",
-    ]
-    echo_verdict = "\n".join(verdict_lines)
+    if is_simulation:
+        verdict_lines = [
+            f"- **Writer Scaffolding 提示工程基准管道 (A1 - A0)**: 差值为 {scaffolding_gain:+.1f} 分，用于验证分析管道对 Writer 提示工程与 Token 预算识别通路；",
+            f"- **Style Profile 纯先验管道 (B - A1)**: 差值为 {profile_gain:+.1f} 分，用于验证控制 Scaffolding 变量后对 Style Profile 纯先验的单变量净贡献识别通路；",
+            f"- **Dense 语义检索基准管道 (C1a - B)**: 差值为 {dense_gain:+.1f} 分，用于验证分析管道对段落连续性与句长节奏吻合度 (Rhythm) 维度的敏感度识别；",
+            f"- **Sparse/RRF 融合管道 (C1b - C1a)**: 差值为 {rrf_gain:+.1f} 分，用于验证分析管道在剔除零相关文档排名偏置后的词频融合识别；",
+            f"- **Style-Aware 结构过滤管道 (C2 - C1b)**: 差值为 {style_filter_gain:+.1f} 分，用于验证分析管道对结构定向过滤与句长离散度变动的权衡捕获能力（严格控制 RRF 变量）；",
+            f"- **Critic 闭环反思管道 (D - C2)**: 差值为 {critic_gain:+.1f} 分，用于验证分析管道对 FSM 反思重写与条件盲审评测器 (Condition-Blind Holdout Evaluator) 的打分闭环通路。",
+        ]
+        echo_verdict = "\n".join(verdict_lines)
+        return f"""## 二、 仿真数据流程验证与分析管道测试 (Simulation Pipeline Verification)
 
-    # 2. 篇章结构拟合分析 (C2 vs C1b)
-    if c2_disc > c1b_disc + 0.5:
-        disc_analysis = (
-            f"Style-Aware 结构化过滤 (C2: {c2_disc:.1f}) 在篇章推进拟合上显著优于无过滤的混合检索 (C1b: {c1b_disc:.1f})（净增益 {c2_disc - c1b_disc:+.1f} 分）。"
-            f"定向装配 `hook`（破空设问）与 `quote`（警策金句）对文章骨架与起承转合有切实塑造效果。"
-        )
-    elif c1b_disc > c2_disc + 0.5:
-        disc_analysis = (
-            f"Style-Aware RAG (C2: {c2_disc:.1f}) 在篇章推进拟合上未及无过滤混合检索 (C1b: {c1b_disc:.1f})（相差 {c2_disc - c1b_disc:.1f} 分），"
-            f"表明异构标签切片的组装在当前上下文衔接上仍需进一步平滑优化。"
-        )
+仿真数据用于验证分析管道能够识别以下差异（仅用于工程流水线与分层统计验证，绝非真实实测结论）：
+{echo_verdict}
+
+### 仿真流程测试说明与多目标权衡捕获：
+1. **篇章结构拟合 (Discourse Fit) 管道识别**：
+   桩数据设定展示了分析管道如何量化结构化过滤 (C2: {c2_disc:.1f}) 与无过滤混合检索 (C1b: {c1b_disc:.1f}) 在篇章起承转合上的分差计算（设定差值 {c2_disc - c1b_disc:+.1f} 分）。
+2. **句长节奏吻合 (Rhythm Match) 管道识别**：
+   桩数据设定展示了分析管道如何捕捉连续段落召回 (C1b: {c1b_rhy:.1f}) 与离散金句拼接 (C2: {c2_rhy:.1f}) 对句长波长拟合度指标的敏感度反应（设定差值 {c2_rhy - c1b_rhy:+.1f} 分）。
+3. **Critic 自审反思闭环与八股防护管道识别**：
+   桩数据设定展示了分析管道对状态机反思重写前后得分变动与套话拦截的捕获逻辑（设定差值 {d_echo - c2_echo:+.1f} 分）。
+
+### 管道验证说明（仅限工程流水线层面）：
+- **严格单变量消融隔离**：设立 A0 (Vanilla LLM) 与 A1 (Scaffolding Base)，确保 B - A1 为 Style Profile 纯先验的真正独立贡献识别通路，同时严格分离 RRF 融合 (C1b - C1a) 与结构过滤 (C2 - C1b) 的各自独立效应；
+- **自适应检索平滑注入**：工程架构支持从单纯的'结构标签硬拼接'演进为'**韵律平滑感知的自适应检索注入 (Rhythm-Smoothed Retrieval Injection)**'，自适应调节上下文长度比例以避免节奏方差震荡；
+- **分层方差建模与条件盲审**：确立 Topic 间宏观方差与采样噪声的分层统计框架，由脱离生成链路的 Condition-Blind Holdout Evaluator 统一盲评，消除评测过拟合；
+- **免责说明**：以上内容仅为离线流水线功能与统计公式验证，不代表真实模型性能；真实科学结论请在配置有效 API Key 后运行在线实测。
+"""
     else:
-        disc_analysis = (
-            f"Style-Aware RAG (C2: {c2_disc:.1f}) 与无结构过滤 RAG (C1b: {c1b_disc:.1f}) 篇章结构拟合度基本相当（{c2_disc:.1f} vs {c1b_disc:.1f}）。"
-        )
+        verdict_lines = [
+            f"- **Writer Scaffolding 提示工程基准 (A1 - A0)**: 增量为 {scaffolding_gain:+.1f} 分，体现 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的基准增益；",
+            f"- **Style Profile 纯先验严格单变量贡献 (B - A1)**: 增量为 {profile_gain:+.1f} 分（**严格控制 Scaffolding 变量后的独立净贡献**）；",
+            f"- **Dense 语义检索基线 (C1a - B)**: 增量为 {dense_gain:+.1f} 分，在段落连续性与句长节奏吻合度 (Rhythm: {c1a_rhy:.1f}) 维度表现优异；",
+            f"- **Sparse/RRF 融合边际效应 (C1b - C1a)**: 增量为 {rrf_gain:+.1f} 分，体现了在无结构过滤且剔除零相关文档排名偏置后的词频融合贡献；",
+            f"- **Style-Aware 结构过滤独立效应 (C2 - C1b)**: 增量为 {style_filter_gain:+.1f} 分（**严格控制 RRF 变量后的结构定向过滤净贡献**）；",
+            f"- **Critic 闭环反思净增益 (D - C2)**: 增量为 {critic_gain:+.1f} 分（由未参与重写的 Condition-Blind Holdout Evaluator 进行条件盲审裁决）。",
+        ]
+        echo_verdict = "\n".join(verdict_lines)
 
-    # 3. 句长节奏吻合度分析 (C1b vs C2)
-    if c1b_rhy > c2_rhy + 0.5:
-        rhy_analysis = (
-            f"【机制归因剖析】：无结构过滤混合检索 (C1b: {c1b_rhy:.1f}) 倾向于召回相对自然的连续段落；"
-            f"而 Style-Aware RAG (C2: {c2_rhy:.1f}) 将短小金句、设问长句与论据异构拼接，诱发生成模型在长短句极值之间跳跃，"
-            f"导致句长方差偏离目标作者基准，节奏吻合分下滑了 {c1b_rhy - c2_rhy:.1f} 分，构成本轮综合得分的主要拖累项。"
-        )
-    elif c2_rhy > c1b_rhy + 0.5:
-        rhy_analysis = (
-            f"Style-Aware RAG (C2: {c2_rhy:.1f}) 的句长波长拟合优于无过滤检索 (C1b: {c1b_rhy:.1f})（+{c2_rhy - c1b_rhy:.1f} 分），"
-            f"短句金句与长句论据的组合较好还原了作者的呼吸节奏。"
-        )
-    else:
-        rhy_analysis = (
-            f"Style-Aware RAG (C2: {c2_rhy:.1f}) 与无过滤 RAG (C1b: {c1b_rhy:.1f}) 在句长节奏维度表现基本相当。"
-        )
+        # 篇章结构拟合分析 (C2 vs C1b)
+        if c2_disc > c1b_disc + 0.5:
+            disc_analysis = (
+                f"Style-Aware 结构化过滤 (C2: {c2_disc:.1f}) 在篇章推进拟合上优于无过滤混合检索 (C1b: {c1b_disc:.1f})（相对差值 {c2_disc - c1b_disc:+.1f} 分）。"
+                f"定向装配 `hook`（破空设问）与 `quote`（警策金句）对文章骨架与起承转合有切实塑造效果。"
+            )
+        elif c1b_disc > c2_disc + 0.5:
+            disc_analysis = (
+                f"Style-Aware RAG (C2: {c2_disc:.1f}) 在篇章推进拟合上未及无过滤混合检索 (C1b: {c1b_disc:.1f})（相差 {c2_disc - c1b_disc:.1f} 分），"
+                f"表明异构标签切片的组装在当前上下文衔接上仍需进一步平滑优化。"
+            )
+        else:
+            disc_analysis = (
+                f"Style-Aware RAG (C2: {c2_disc:.1f}) 与无结构过滤 RAG (C1b: {c1b_disc:.1f}) 篇章结构拟合度基本相当（{c2_disc:.1f} vs {c1b_disc:.1f}）。"
+            )
 
-    # 4. Critic 自审反思闭环与八股防护
-    if c2_pen > 0 and d_pen < c2_pen:
-        critic_analysis = (
-            f"Critic 自审反思闭环在 D 阶段精准拦截了 C2 阶段暴露的偶发八股违规词（八股惩罚从 -{c2_pen:.1f} 分收敛至 -{d_pen:.1f} 分），"
-            f"使 Full EchoStyle (D: {d_echo:.1f}) 实现了质量自愈提升（+{d_echo - c2_echo:.1f} 分），"
-            f"证实了状态机反思机制在兜底安全红线上的工程有效性。"
-        )
-    elif d_echo > c2_echo + 0.5:
-        critic_analysis = (
-            f"Full EchoStyle (D: {d_echo:.1f}) 相对无自审的 C2 ({c2_echo:.1f}) 取得净增益 +{d_echo - c2_echo:.1f} 分，"
-            f"多轮反思重构对行文质感与论述锐度带来了可测量的正向提振。"
-        )
-    else:
-        critic_analysis = (
-            f"Critic 介入后 D ({d_echo:.1f}) 相对 C2 ({c2_echo:.1f}) 综合得分基本持平（变动 {d_echo - c2_echo:+.1f} 分）。"
-            f"反思重写虽压制了违规词汇，但也带来生成策略偏向保守防御的轻微副作用。"
-        )
+        # 句长节奏吻合度分析 (C1b vs C2)
+        if c1b_rhy > c2_rhy + 0.5:
+            rhy_analysis = (
+                f"【机制归因剖析】：无结构过滤混合检索 (C1b: {c1b_rhy:.1f}) 倾向于召回相对自然的连续段落；"
+                f"而 Style-Aware RAG (C2: {c2_rhy:.1f}) 将短小金句、设问长句与论据异构拼接，诱发生成模型在长短句极值之间跳跃，"
+                f"导致句长方差偏离目标作者基准，节奏吻合分下滑了 {c1b_rhy - c2_rhy:.1f} 分，构成本轮综合得分的主要拖累项。"
+            )
+        elif c2_rhy > c1b_rhy + 0.5:
+            rhy_analysis = (
+                f"Style-Aware RAG (C2: {c2_rhy:.1f}) 的句长波长拟合优于无过滤检索 (C1b: {c1b_rhy:.1f})（+{c2_rhy - c1b_rhy:.1f} 分），"
+                f"短句金句与长句论据的组合较好还原了作者的呼吸节奏。"
+            )
+        else:
+            rhy_analysis = (
+                f"Style-Aware RAG (C2: {c2_rhy:.1f}) 与无过滤 RAG (C1b: {c1b_rhy:.1f}) 在句长节奏维度表现基本相当。"
+            )
 
-    return f"""## 二、 客观实验事实与科学归因分析 (Empirical Findings & Tradeoff Analysis)
+        # Critic 自审反思闭环与八股防护
+        if c2_pen > 0 and d_pen < c2_pen:
+            critic_analysis = (
+                f"Critic 自审反思闭环在 D 阶段精准拦截了 C2 阶段暴露的偶发八股违规词（八股惩罚从 -{c2_pen:.1f} 分收敛至 -{d_pen:.1f} 分），"
+                f"使 Full EchoStyle (D: {d_echo:.1f}) 实现了质量自愈提升（+{d_echo - c2_echo:.1f} 分）。"
+            )
+        elif d_echo > c2_echo + 0.5:
+            critic_analysis = (
+                f"Full EchoStyle (D: {d_echo:.1f}) 相对无自审的 C2 ({c2_echo:.1f}) 取得净增益 +{d_echo - c2_echo:.1f} 分，"
+                f"多轮反思重构对行文质感与论述锐度带来了正向提振。"
+            )
+        else:
+            critic_analysis = (
+                f"Critic 介入后 D ({d_echo:.1f}) 相对 C2 ({c2_echo:.1f}) 综合得分基本持平（变动 {d_echo - c2_echo:+.1f} 分）。"
+                f"反思重写虽压制了违规词汇，但也带来生成策略偏向保守防御的轻微副作用。"
+            )
+
+        return f"""## 二、 客观实验事实与科学归因分析 (Empirical Findings & Tradeoff Analysis)
 
 实测数据揭示了严格单变量消融下的系统多目标权衡：
 {echo_verdict}
@@ -309,10 +344,35 @@ def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]]
    {critic_analysis}
 
 ### 科学启示与工程迭代方向：
-- **严格单变量消融隔离**：科学消融的意义在于分离 RRF 融合 (C1b - C1a) 与结构过滤 (C2 - C1b) 的各自独立效应，坚决避免混合变量断言；
+- **严格单变量消融隔离**：科学消融的意义在于分离 Profile 先验 (B - A1)、RRF 融合 (C1b - C1a) 与结构过滤 (C2 - C1b) 的各自独立效应，坚决避免混合变量断言；
 - **自适应检索平滑注入**：从单纯的'结构标签硬拼接'演进为'**韵律平滑感知的自适应检索注入 (Rhythm-Smoothed Retrieval Injection)**'，在注入金句的同时自适应调节上下文长度比例，避免对句长节奏方差造成过度震荡；
-- **分层方差建模与独立盲审**：确立 Topic 间宏观方差与采样噪声的分层统计框架，由脱离生成链路的 Independent Evaluator 统一盲评，消除评测过拟合。
+- **分层方差建模与条件盲审**：确立 Topic 间宏观方差与采样噪声的分层统计框架，由脱离生成链路的 Condition-Blind Holdout Evaluator 统一盲评，消除评测过拟合。
 """
+
+
+def _evaluate_condition_run(
+    evaluator: IndependentEvaluator,
+    article: str,
+    profile: DeepStyleProfile,
+    metrics: Any,
+    max_retries: int = 2,
+) -> Optional[CompositeEvaluationResult]:
+    """
+    带重试与严格 Fail-Closed 的消融评估样本解析：
+    若 LLM Judge 失败触发 EvaluationUnavailableError，重试 max_retries 次；
+    若重试均告失败，坚决返回 None 以便排除该样本，绝不填入 80/85/80 默认虚拟分污染基准！
+    """
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            report = evaluator.evaluate(article, profile)
+            return CompositeEvaluator.calculate_echoscore(article, metrics, profile, report.style_fidelity)
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                time.sleep(1.5 * (attempt + 1))
+    console.print(f"[bold red]❌ 裁判评测失败 (strict 排除样本，杜绝默认分污染基准): {last_err}[/bold red]")
+    return None
 
 
 def run_ablation_study(
@@ -369,14 +429,14 @@ def run_ablation_study(
             metric: [[] for _ in range(num_topics)]
             for metric in ["echo", "discourse", "rhythm", "lexical", "penalty"]
         }
-        for code in ["A", "B", "C1a", "C1b", "C2", "D"]
+        for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]
     }
 
     if not is_simulation:
         provider = ModelProvider(config.llm, config.embedding)
         coordinator = CoordinatorAgent(config)
-        # P0-3 修复：独立双盲评测器，温度为 0.0，从不参与生成阶段的 feedback
-        independent_evaluator = IndependentEvaluator(config.llm)
+        # P0-3 修复：独立条件盲审评测器，temperature=0.0，且开启 strict 模式（Fail-Closed，严禁默认好成绩）
+        independent_evaluator = IndependentEvaluator(config.get_evaluator_config(), strict=True)
 
         # Fail-Closed 预检：验证 Embedding 向量服务是否可用与维度完整性
         probe_emb = provider.get_embeddings(["embedding probe test 1", "embedding probe test 2"])
@@ -402,51 +462,46 @@ def run_ablation_study(
             for rep in range(1, repeats + 1):
                 console.print(f"[bold yellow]>> 正在运行 Topic {t_idx + 1}/{num_topics} (轮次 {rep}/{repeats}): [{t_topic[:20]}...][/bold yellow]")
 
-                # Condition A: Vanilla Baseline 0 (无 Profile / 无 RAG / 无 Critic，纯大模型通用基线)
-                sys_a = "你是一位专业的文章撰写助手，请围绕给定的选题写一篇深刻的文章。"
-                user_a = f"围绕以下新主题创作一篇完整的文章：\n- **文章主题**：{t_topic}\n- **核心论述要点**：\n{t_points}\n- **目标字数**：1000 左右\n\n请直接输出成文全文。"
-                art_a = provider.chat(sys_a, user_a, temperature=0.7)
-                eval_a = independent_evaluator.evaluate(art_a, deep_profile)
-                res_a = CompositeEvaluator.calculate_echoscore(art_a, ground_truth_metrics, deep_profile, eval_a.style_fidelity)
+                # 1. Condition A0: Vanilla Baseline 0 (纯通用外部基线)
+                sys_a0 = "你是一位专业的文章撰写助手，请围绕给定的选题写一篇深刻的文章。"
+                user_a0 = f"围绕以下新主题创作一篇完整的文章：\n- **文章主题**：{t_topic}\n- **核心论述要点**：\n{t_points}\n- **目标字数**：1000 左右\n\n请直接输出成文全文。"
+                art_a0 = provider.chat(sys_a0, user_a0, temperature=0.7)
 
-                # Condition B: +Profile Only (有 Profile / 无 RAG / 无 Critic，通过 WriterAgent 统一装配，显式空检索快照)
+                # 2. Condition A1: Writer Scaffolding Baseline (工程基准)
+                state_a1 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
+                state_a1.memory_snapshot = []
+                art_a1 = coordinator.writer_agent.generate(state_a1, profile=None)
+
+                # 3. Condition B: +Profile Only (严格单变量验证 Profile 独立贡献: B - A1)
                 state_b = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 state_b.memory_snapshot = []
                 art_b = coordinator.writer_agent.generate(state_b, deep_profile)
-                eval_b = independent_evaluator.evaluate(art_b, deep_profile)
-                res_b = CompositeEvaluator.calculate_echoscore(art_b, ground_truth_metrics, deep_profile, eval_b.style_fidelity)
 
-                # Condition C1a: +Dense RAG (纯密集向量余弦检索，无结构过滤，无 Sparse/RRF，统一通过 WriterAgent 生成)
+                # 4. Condition C1a: +Dense RAG (纯密集向量余弦检索)
                 state_c1a = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c1a_few_shots = coordinator.memory_manager.retrieve_dense(
                     query=f"{t_topic} {t_points}", top_k=3, target_type=None
                 )
                 state_c1a.memory_snapshot = [{"content": s} for s in c1a_few_shots]
                 art_c1a = coordinator.writer_agent.generate(state_c1a, deep_profile)
-                eval_c1a = independent_evaluator.evaluate(art_c1a, deep_profile)
-                res_c1a = CompositeEvaluator.calculate_echoscore(art_c1a, ground_truth_metrics, deep_profile, eval_c1a.style_fidelity)
 
-                # Condition C1b: +Hybrid RRF RAG (Dense + Sparse RRF 融合，无结构类型过滤，严格单变量对照)
+                # 5. Condition C1b: +Hybrid RRF RAG (Dense + Sparse RRF 融合，剔除零相关文档偏置)
                 state_c1b = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c1b_few_shots = coordinator.memory_manager.retrieve_hybrid(
                     query=f"{t_topic} {t_points}", top_k=3, target_type=None, require_dense=True
                 )
                 state_c1b.memory_snapshot = [{"content": s} for s in c1b_few_shots]
                 art_c1b = coordinator.writer_agent.generate(state_c1b, deep_profile)
-                eval_c1b = independent_evaluator.evaluate(art_c1b, deep_profile)
-                res_c1b = CompositeEvaluator.calculate_echoscore(art_c1b, ground_truth_metrics, deep_profile, eval_c1b.style_fidelity)
 
-                # Condition C2: +Style-Aware RAG (Hybrid RRF + hook/quote/argument 篇章结构定向装配，单变量检验结构过滤贡献)
+                # 6. Condition C2: +Style-Aware RAG (结构定向装配)
                 state_c2 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c2_few_shots = coordinator.memory_manager.retrieve_dynamic_few_shots(
                     query=f"{t_topic} {t_points}", top_k=3, require_dense=True
                 )
                 state_c2.memory_snapshot = [{"content": s} for s in c2_few_shots]
                 art_c2 = coordinator.writer_agent.generate(state_c2, deep_profile)
-                eval_c2 = independent_evaluator.evaluate(art_c2, deep_profile)
-                res_c2 = CompositeEvaluator.calculate_echoscore(art_c2, ground_truth_metrics, deep_profile, eval_c2.style_fidelity)
 
-                # Condition D: Full EchoStyle (单变量严控：复用 C2 检索快照与 C2 初稿 art_c2，唯一增量为 Coordinator 内部 Critic 自审重写；终审由 Independent Evaluator 盲审)
+                # 7. Condition D: Full EchoStyle (单变量严控：复用 C2 检索快照与 C2 初稿)
                 state_d = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 state_d.memory_snapshot = state_c2.memory_snapshot
                 art_d, _, _ = coordinator.run(
@@ -454,23 +509,37 @@ def run_ablation_study(
                     profile=deep_profile,
                     initial_draft=art_c2,
                 )
-                eval_d = independent_evaluator.evaluate(art_d, deep_profile)
-                res_d = CompositeEvaluator.calculate_echoscore(art_d, ground_truth_metrics, deep_profile, eval_d.style_fidelity)
 
-                # 记录指标到分层数据结构
-                for code, res in [("A", res_a), ("B", res_b), ("C1a", res_c1a), ("C1b", res_c1b), ("C2", res_c2), ("D", res_d)]:
-                    condition_records[code]["echo"][t_idx].append(res.echo_score)
-                    condition_records[code]["discourse"][t_idx].append(res.discourse_fit)
-                    condition_records[code]["rhythm"][t_idx].append(res.rhythm_match)
-                    condition_records[code]["lexical"][t_idx].append(res.lexical_authenticity)
-                    condition_records[code]["penalty"][t_idx].append(res.cliche_penalty)
+                # 统一由 Condition-Blind Holdout Evaluator 进行严格条件盲审打分 (Fail-Closed，排除失败样本，杜绝默认分伪造)
+                cond_runs = [
+                    ("A0", art_a0), ("A1", art_a1), ("B", art_b),
+                    ("C1a", art_c1a), ("C1b", art_c1b), ("C2", art_c2), ("D", art_d)
+                ]
+                for code, art in cond_runs:
+                    res = _evaluate_condition_run(independent_evaluator, art, deep_profile, ground_truth_metrics)
+                    if res is not None:
+                        condition_records[code]["echo"][t_idx].append(res.echo_score)
+                        condition_records[code]["discourse"][t_idx].append(res.discourse_fit)
+                        condition_records[code]["rhythm"][t_idx].append(res.rhythm_match)
+                        condition_records[code]["lexical"][t_idx].append(res.lexical_authenticity)
+                        condition_records[code]["penalty"][t_idx].append(res.cliche_penalty)
+                    else:
+                        console.print(f"[yellow]⚠️ Condition {code} Topic {t_idx + 1} 采样评测不可用，已排除该次采样（拒绝默认好成绩污染）。[/yellow]")
+
+        # 检查各 Condition 是否存在有效评测数据
+        for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]:
+            total_samples = sum(len(topic_list) for topic_list in condition_records[code]["echo"])
+            if total_samples == 0:
+                from src.core.exceptions import EvaluationUnavailableError
+                raise EvaluationUnavailableError(f"消融条件 [{code}] 的所有评测采样均因裁判服务异常而失败，无法生成有效报告。")
 
     else:
         # 离线模拟数据：多主题分层模拟，如实反映客观权衡 (C1a > C1b > C2 ≈ D)
         sim_presets = [
             # Topic 1
             {
-                "A": (79.4, 83.2, 91.3, 93.2, 0.0),
+                "A0": (79.4, 83.2, 91.3, 93.2, 0.0),
+                "A1": (82.5, 86.0, 88.0, 92.8, 0.0),
                 "B": (87.9, 90.4, 73.2, 92.3, 0.0),
                 "C1a": (93.5, 94.8, 99.2, 95.0, 0.0),
                 "C1b": (92.1, 95.5, 93.8, 95.1, 0.0),
@@ -479,7 +548,8 @@ def run_ablation_study(
             },
             # Topic 2
             {
-                "A": (78.2, 81.5, 89.8, 92.8, 10.0),
+                "A0": (78.2, 81.5, 89.8, 92.8, 10.0),
+                "A1": (81.6, 84.5, 87.1, 92.2, 0.0),
                 "B": (86.5, 89.2, 74.0, 91.8, 0.0),
                 "C1a": (92.8, 94.2, 98.6, 94.5, 0.0),
                 "C1b": (91.5, 95.0, 93.2, 94.6, 0.0),
@@ -488,7 +558,8 @@ def run_ablation_study(
             },
             # Topic 3
             {
-                "A": (80.1, 84.0, 92.0, 93.5, 0.0),
+                "A0": (80.1, 84.0, 92.0, 93.5, 0.0),
+                "A1": (83.2, 86.8, 88.5, 93.0, 0.0),
                 "B": (88.4, 91.0, 72.8, 92.6, 0.0),
                 "C1a": (94.1, 95.2, 99.5, 95.4, 0.0),
                 "C1b": (92.8, 95.9, 94.3, 95.3, 0.0),
@@ -497,7 +568,8 @@ def run_ablation_study(
             },
             # Topic 4
             {
-                "A": (79.0, 82.8, 90.9, 93.0, 0.0),
+                "A0": (79.0, 82.8, 90.9, 93.0, 0.0),
+                "A1": (82.1, 85.5, 87.5, 92.5, 0.0),
                 "B": (87.2, 90.0, 73.5, 92.0, 0.0),
                 "C1a": (93.2, 94.6, 99.0, 94.8, 0.0),
                 "C1b": (91.8, 95.3, 93.5, 94.9, 0.0),
@@ -506,7 +578,8 @@ def run_ablation_study(
             },
             # Topic 5
             {
-                "A": (78.8, 82.4, 91.0, 92.9, 0.0),
+                "A0": (78.8, 82.4, 91.0, 92.9, 0.0),
+                "A1": (81.9, 85.0, 87.2, 92.4, 0.0),
                 "B": (87.5, 90.2, 73.0, 92.2, 0.0),
                 "C1a": (93.6, 95.0, 99.1, 95.1, 0.0),
                 "C1b": (92.3, 95.6, 93.9, 95.2, 0.0),
@@ -520,7 +593,7 @@ def run_ablation_study(
             for rep in range(repeats):
                 # 产生基于独立采样的扰动方差 (Sampling Noise)
                 rep_noise = round(math.sin(rep * 1.7 + t_idx * 1.1) * 1.2 + (rep - repeats / 2.0) * 0.2, 2)
-                for code in ["A", "B", "C1a", "C1b", "C2", "D"]:
+                for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]:
                     echo, disc, rhy, lex, pen = preset[code]
                     condition_records[code]["echo"][t_idx].append(round(echo + rep_noise, 1))
                     condition_records[code]["discourse"][t_idx].append(round(disc + rep_noise * 0.5, 1))
@@ -530,7 +603,7 @@ def run_ablation_study(
 
     # 3. 聚合各条件分层统计量 (Hierarchical Stat: Mean, Between-Std, 95% CI, Within-Std)
     summary: Dict[str, Dict[str, HierarchicalStat]] = {}
-    for code in ["A", "B", "C1a", "C1b", "C2", "D"]:
+    for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]:
         summary[code] = {
             "echo": _calc_hierarchical_stats(condition_records[code]["echo"]),
             "discourse": _calc_hierarchical_stats(condition_records[code]["discourse"]),
@@ -543,6 +616,7 @@ def run_ablation_study(
     title_suffix = " [离线模拟模式 MOCK - 流程验证]" if is_simulation else " [真实实测 REAL - 在线评测]"
     table = Table(title=f"EchoStyle 3.2 严格单变量消融实验矩阵{title_suffix}")
     table.add_column("消融实验条件", style="cyan bold")
+    table.add_column("Scaffolding", justify="center")
     table.add_column("Profile", justify="center")
     table.add_column("Dense检索", justify="center")
     table.add_column("Hybrid RRF", justify="center")
@@ -558,20 +632,21 @@ def run_ablation_study(
     table.add_column("组内采样波动 (Within σ)", justify="right")
 
     cond_configs = [
-        ("A (Vanilla Base)", "❌", "❌", "❌", "❌", "❌", "✅", "A"),
-        ("B (+Profile Only)", "✅", "❌", "❌", "❌", "❌", "✅", "B"),
-        ("C1a (+Dense RAG)", "✅", "✅", "❌", "❌", "❌", "✅", "C1a"),
-        ("C1b (+Hybrid RRF RAG)", "✅", "✅", "✅", "❌", "❌", "✅", "C1b"),
-        ("C2 (+Style-Aware RAG)", "✅", "✅", "✅", "✅", "❌", "✅", "C2"),
-        ("D (Full EchoStyle)", "✅", "✅", "✅", "✅", "✅", "✅", "D"),
+        ("A0 (Vanilla Base)", "❌", "❌", "❌", "❌", "❌", "❌", "✅", "A0"),
+        ("A1 (Scaffolding Base)", "✅", "❌", "❌", "❌", "❌", "❌", "✅", "A1"),
+        ("B (+Profile Only)", "✅", "✅", "❌", "❌", "❌", "❌", "✅", "B"),
+        ("C1a (+Dense RAG)", "✅", "✅", "✅", "❌", "❌", "❌", "✅", "C1a"),
+        ("C1b (+Hybrid RRF RAG)", "✅", "✅", "✅", "✅", "❌", "❌", "✅", "C1b"),
+        ("C2 (+Style-Aware RAG)", "✅", "✅", "✅", "✅", "✅", "❌", "✅", "C2"),
+        ("D (Full EchoStyle)", "✅", "✅", "✅", "✅", "✅", "✅", "✅", "D"),
     ]
 
-    for name, p, r_dense, r_rrf, r_filter, c_loop, c_eval, code in cond_configs:
+    for name, scaff, p, r_dense, r_rrf, r_filter, c_loop, c_eval, code in cond_configs:
         s = summary[code]
         echo_str = f"{s['echo'].mean:.1f} ± {s['echo'].std:.1f}"
         ci_str = f"[{max(0.0, s['echo'].mean - s['echo'].ci95):.1f}, {s['echo'].mean + s['echo'].ci95:.1f}]"
         table.add_row(
-            name, p, r_dense, r_rrf, r_filter, c_loop, c_eval,
+            name, scaff, p, r_dense, r_rrf, r_filter, c_loop, c_eval,
             f"{s['discourse'].mean:.1f}",
             f"{s['rhythm'].mean:.1f}",
             f"{s['lexical'].mean:.1f}",
@@ -584,14 +659,16 @@ def run_ablation_study(
     console.print(table)
 
     # 5. 组件严格单变量边际增益分析
-    mean_a = summary["A"]["echo"].mean
+    mean_a0 = summary["A0"]["echo"].mean
+    mean_a1 = summary["A1"]["echo"].mean
     mean_b = summary["B"]["echo"].mean
     mean_c1a = summary["C1a"]["echo"].mean
     mean_c1b = summary["C1b"]["echo"].mean
     mean_c2 = summary["C2"]["echo"].mean
     mean_d = summary["D"]["echo"].mean
 
-    gain_profile = mean_b - mean_a
+    gain_scaffolding = mean_a1 - mean_a0
+    gain_profile = mean_b - mean_a1        # 严格单变量：控制 Scaffolding 一致后 Profile 净贡献
     gain_dense = mean_c1a - mean_b
     gain_rrf = mean_c1b - mean_c1a
     gain_style_filter = mean_c2 - mean_c1b  # 严格单变量比较：C2 - C1b，隔离结构过滤
@@ -606,11 +683,19 @@ def run_ablation_study(
     def fmt_gain(val: float) -> str:
         return f"{val:+.1f} 分"
 
+    scaff_color = "green" if gain_scaffolding >= 0 else "yellow"
     contrib_table.add_row(
-        "B vs A",
-        "Style Profile 显式先验",
-        f"[green]{fmt_gain(gain_profile)}[/green]",
-        "显式注入统计句长均值/方差与人设约束，摆脱通用 AI 机械翻译腔"
+        "A1 vs A0",
+        "Writer Scaffolding 提示工程基准",
+        f"[{scaff_color}]{fmt_gain(gain_scaffolding)}[/{scaff_color}]",
+        "隔离 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的独立贡献"
+    )
+    prof_color = "green" if gain_profile >= 0 else "yellow"
+    contrib_table.add_row(
+        "B vs A1",
+        "Style Profile 纯先验 (严格单变量)",
+        f"[{prof_color}]{fmt_gain(gain_profile)}[/{prof_color}]",
+        "在保持 WriterAgent Scaffolding 完全一致的条件下，纯 Style Profile 先验的真正独立贡献"
     )
     contrib_table.add_row(
         "C1a vs B",
@@ -623,7 +708,7 @@ def run_ablation_study(
         "C1b vs C1a",
         "Sparse/RRF 排名融合",
         f"[{c1b_color}]{fmt_gain(gain_rrf)}[/{c1b_color}]",
-        "在无结构过滤下引入词频混合召回，增强词汇命中多样性"
+        "在无结构过滤下引入词频混合召回，增强词汇命中多样性（已剔除零相关文档排名偏置）"
     )
     c2_color = "green" if gain_style_filter >= 0 else "red"
     c2_desc = (
@@ -667,7 +752,7 @@ def run_ablation_study(
         else "> **实验模式**：真实在线 LLM 实测 (REAL ONLINE LLM EXECUTION)"
     )
 
-    empirical_analysis_section = _generate_empirical_analysis(summary)
+    empirical_analysis_section = _generate_empirical_analysis(summary, is_simulation=is_simulation)
 
     report_md = f"""# EchoStyle 3.2 严格单变量消融实验报告 (Strict Single-Variable Matrix Report)
 
@@ -677,14 +762,15 @@ def run_ablation_study(
 
 ## 一、 消融实验统计矩阵 (Hierarchical Topic Clustered: Mean ± Std & 95% Student-t CI)
 
-| 消融实验条件 | Profile | Dense 检索 | Hybrid RRF | 结构过滤 | Critic 重写 | 独立盲审 | 篇章拟合 (Discourse) | 节奏吻合 (Rhythm) | 用词质感 (Lexical) | 八股惩罚 | 跨主题 EchoScore (Mean ± Std) | 95% 置信区间 (Student-t) | 组内采样波动 (Within σ) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **A (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['A']['discourse'].mean:.1f} | {summary['A']['rhythm'].mean:.1f} | {summary['A']['lexical'].mean:.1f} | -{summary['A']['penalty'].mean:.1f} | **{summary['A']['echo'].mean:.1f} ± {summary['A']['echo'].std:.1f}** | [{max(0.0, summary['A']['echo'].mean - summary['A']['echo'].ci95):.1f}, {summary['A']['echo'].mean + summary['A']['echo'].ci95:.1f}] | ±{summary['A']['echo'].within_std:.2f} |
-| **B (+Profile Only)** | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['B']['discourse'].mean:.1f} | {summary['B']['rhythm'].mean:.1f} | {summary['B']['lexical'].mean:.1f} | -{summary['B']['penalty'].mean:.1f} | **{summary['B']['echo'].mean:.1f} ± {summary['B']['echo'].std:.1f}** | [{max(0.0, summary['B']['echo'].mean - summary['B']['echo'].ci95):.1f}, {summary['B']['echo'].mean + summary['B']['echo'].ci95:.1f}] | ±{summary['B']['echo'].within_std:.2f} |
-| **C1a (+Dense RAG)** | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | {summary['C1a']['discourse'].mean:.1f} | {summary['C1a']['rhythm'].mean:.1f} | {summary['C1a']['lexical'].mean:.1f} | -{summary['C1a']['penalty'].mean:.1f} | **{summary['C1a']['echo'].mean:.1f} ± {summary['C1a']['echo'].std:.1f}** | [{max(0.0, summary['C1a']['echo'].mean - summary['C1a']['echo'].ci95):.1f}, {summary['C1a']['echo'].mean + summary['C1a']['echo'].ci95:.1f}] | ±{summary['C1a']['echo'].within_std:.2f} |
-| **C1b (+Hybrid RRF RAG)** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | {summary['C1b']['discourse'].mean:.1f} | {summary['C1b']['rhythm'].mean:.1f} | {summary['C1b']['lexical'].mean:.1f} | -{summary['C1b']['penalty'].mean:.1f} | **{summary['C1b']['echo'].mean:.1f} ± {summary['C1b']['echo'].std:.1f}** | [{max(0.0, summary['C1b']['echo'].mean - summary['C1b']['echo'].ci95):.1f}, {summary['C1b']['echo'].mean + summary['C1b']['echo'].ci95:.1f}] | ±{summary['C1b']['echo'].within_std:.2f} |
-| **C2 (+Style-Aware RAG)** | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | {summary['C2']['discourse'].mean:.1f} | {summary['C2']['rhythm'].mean:.1f} | {summary['C2']['lexical'].mean:.1f} | -{summary['C2']['penalty'].mean:.1f} | **{summary['C2']['echo'].mean:.1f} ± {summary['C2']['echo'].std:.1f}** | [{max(0.0, summary['C2']['echo'].mean - summary['C2']['echo'].ci95):.1f}, {summary['C2']['echo'].mean + summary['C2']['echo'].ci95:.1f}] | ±{summary['C2']['echo'].within_std:.2f} |
-| **D (Full EchoStyle)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | {summary['D']['discourse'].mean:.1f} | {summary['D']['rhythm'].mean:.1f} | {summary['D']['lexical'].mean:.1f} | -{summary['D']['penalty'].mean:.1f} | **{summary['D']['echo'].mean:.1f} ± {summary['D']['echo'].std:.1f}** | [{max(0.0, summary['D']['echo'].mean - summary['D']['echo'].ci95):.1f}, {summary['D']['echo'].mean + summary['D']['echo'].ci95:.1f}] | ±{summary['D']['echo'].within_std:.2f} |
+| 消融实验条件 | Scaffolding | Profile | Dense 检索 | Hybrid RRF | 结构过滤 | Critic 重写 | 独立盲审 | 篇章拟合 (Discourse) | 节奏吻合 (Rhythm) | 用词质感 (Lexical) | 八股惩罚 | 跨主题 EchoScore (Mean ± Std) | 95% 置信区间 (Student-t) | 组内采样波动 (Within σ) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **A0 (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['A0']['discourse'].mean:.1f} | {summary['A0']['rhythm'].mean:.1f} | {summary['A0']['lexical'].mean:.1f} | -{summary['A0']['penalty'].mean:.1f} | **{summary['A0']['echo'].mean:.1f} ± {summary['A0']['echo'].std:.1f}** | [{max(0.0, summary['A0']['echo'].mean - summary['A0']['echo'].ci95):.1f}, {summary['A0']['echo'].mean + summary['A0']['echo'].ci95:.1f}] | ±{summary['A0']['echo'].within_std:.2f} |
+| **A1 (Scaffolding Base)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['A1']['discourse'].mean:.1f} | {summary['A1']['rhythm'].mean:.1f} | {summary['A1']['lexical'].mean:.1f} | -{summary['A1']['penalty'].mean:.1f} | **{summary['A1']['echo'].mean:.1f} ± {summary['A1']['echo'].std:.1f}** | [{max(0.0, summary['A1']['echo'].mean - summary['A1']['echo'].ci95):.1f}, {summary['A1']['echo'].mean + summary['A1']['echo'].ci95:.1f}] | ±{summary['A1']['echo'].within_std:.2f} |
+| **B (+Profile Only)** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['B']['discourse'].mean:.1f} | {summary['B']['rhythm'].mean:.1f} | {summary['B']['lexical'].mean:.1f} | -{summary['B']['penalty'].mean:.1f} | **{summary['B']['echo'].mean:.1f} ± {summary['B']['echo'].std:.1f}** | [{max(0.0, summary['B']['echo'].mean - summary['B']['echo'].ci95):.1f}, {summary['B']['echo'].mean + summary['B']['echo'].ci95:.1f}] | ±{summary['B']['echo'].within_std:.2f} |
+| **C1a (+Dense RAG)** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | {summary['C1a']['discourse'].mean:.1f} | {summary['C1a']['rhythm'].mean:.1f} | {summary['C1a']['lexical'].mean:.1f} | -{summary['C1a']['penalty'].mean:.1f} | **{summary['C1a']['echo'].mean:.1f} ± {summary['C1a']['echo'].std:.1f}** | [{max(0.0, summary['C1a']['echo'].mean - summary['C1a']['echo'].ci95):.1f}, {summary['C1a']['echo'].mean + summary['C1a']['echo'].ci95:.1f}] | ±{summary['C1a']['echo'].within_std:.2f} |
+| **C1b (+Hybrid RRF RAG)** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | {summary['C1b']['discourse'].mean:.1f} | {summary['C1b']['rhythm'].mean:.1f} | {summary['C1b']['lexical'].mean:.1f} | -{summary['C1b']['penalty'].mean:.1f} | **{summary['C1b']['echo'].mean:.1f} ± {summary['C1b']['echo'].std:.1f}** | [{max(0.0, summary['C1b']['echo'].mean - summary['C1b']['echo'].ci95):.1f}, {summary['C1b']['echo'].mean + summary['C1b']['echo'].ci95:.1f}] | ±{summary['C1b']['echo'].within_std:.2f} |
+| **C2 (+Style-Aware RAG)** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | {summary['C2']['discourse'].mean:.1f} | {summary['C2']['rhythm'].mean:.1f} | {summary['C2']['lexical'].mean:.1f} | -{summary['C2']['penalty'].mean:.1f} | **{summary['C2']['echo'].mean:.1f} ± {summary['C2']['echo'].std:.1f}** | [{max(0.0, summary['C2']['echo'].mean - summary['C2']['echo'].ci95):.1f}, {summary['C2']['echo'].mean + summary['C2']['echo'].ci95:.1f}] | ±{summary['C2']['echo'].within_std:.2f} |
+| **D (Full EchoStyle)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | {summary['D']['discourse'].mean:.1f} | {summary['D']['rhythm'].mean:.1f} | {summary['D']['lexical'].mean:.1f} | -{summary['D']['penalty'].mean:.1f} | **{summary['D']['echo'].mean:.1f} ± {summary['D']['echo'].std:.1f}** | [{max(0.0, summary['D']['echo'].mean - summary['D']['echo'].ci95):.1f}, {summary['D']['echo'].mean + summary['D']['echo'].ci95:.1f}] | ±{summary['D']['echo'].within_std:.2f} |
 
 {empirical_analysis_section}
 """

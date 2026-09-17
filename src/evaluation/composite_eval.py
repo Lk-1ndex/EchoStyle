@@ -44,7 +44,14 @@ class CompositeEvaluator:
         lexical_score, lex_breakdown = LexicalEvaluator.evaluate_lexical_authenticity(generated_text, target_sttr)
 
         # 4. 违规套话扣分 (Cliche Penalty)
-        _, cliche_penalty, detected = LexicalEvaluator.evaluate_cliches(generated_text)
+        forbidden = (
+            target_profile.qualitative.anti_patterns.forbidden_words
+            if (target_profile and target_profile.qualitative and target_profile.qualitative.anti_patterns)
+            else None
+        )
+        _, cliche_penalty, detected = LexicalEvaluator.evaluate_cliches(
+            generated_text, custom_forbidden=forbidden
+        )
 
         # 5. 综合加权最终统一目标 (Unified Optimization Objective)
         # EchoScore = 0.35 * Fidelity + 0.25 * Discourse + 0.20 * Rhythm + 0.20 * Lexical - ClichePenalty

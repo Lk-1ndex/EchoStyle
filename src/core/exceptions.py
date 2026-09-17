@@ -42,3 +42,9 @@ class EmbeddingDimensionMismatchError(EchoStyleException):
         self.chunk_id = chunk_id
 
 
+class EvaluationUnavailableError(EchoStyleException):
+    """评测裁决服务不可用或返回格式异常（Fail-Closed 严控评测客观性，严禁以默认虚拟分污染基准）"""
+    pass
+
+
+
