@@ -6,6 +6,7 @@ class ChunkMetadata(BaseModel):
     """风格记忆切片富元数据 (Rich Metadata)"""
     chunk_id: str
     source: str
+    profile_id: Optional[str] = Field(None, description="所属文风档案 ID；None 表示无归属切片")
     position: str = Field("body", description="篇章位置: opening(开篇), body(主体论述), ending(结语收束)")
     position_pct: float = Field(0.5, description="在原文章中的相对位置百分比 (0.0-1.0)")
     function: str = Field("argument", description="功能分类: hook(吸引), argument(核心论点), example(生动案例), quote(警醒金句), conclusion(反思总结)")
@@ -141,6 +142,7 @@ class DeepStyleProfile(BaseModel):
     深度融合【统计语言学客观指标 (Stylometrics)】与【LLM 质性解构指纹】。
     """
     name: str = Field("深度文风档案", description="文风名称")
+    profile_id: Optional[str] = Field(None, description="新建模时生成的持久化档案 ID；旧档案缺失此字段")
     qualitative: StyleProfile = Field(..., description="质性风格特征")
     quantitative: Optional[StatisticalMetrics] = Field(None, description="统计语言学客观特征")
 

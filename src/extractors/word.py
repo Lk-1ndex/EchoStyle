@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from markitdown import MarkItDown
 from .base import BaseExtractor
@@ -19,8 +18,10 @@ class WordExtractor(BaseExtractor):
         if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
-        if path.suffix.lower() not in [".docx", ".doc"]:
-            raise ValueError(f"不支持的文件扩展名: {path.suffix}，仅支持 .docx 或 .doc")
+        if path.suffix.lower() == ".doc":
+            raise ValueError("旧版 .doc 文件暂不支持，请先转换为 .docx。")
+        if path.suffix.lower() != ".docx":
+            raise ValueError(f"不支持的文件扩展名: {path.suffix}，仅支持 .docx")
 
         # 使用 MarkItDown 统一转译
         conversion_result = self.md_engine.convert(str(path))

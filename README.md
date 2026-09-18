@@ -11,12 +11,12 @@
      - `Condition A0 (Vanilla LLM Base)`: 通用 LLM 外部基准（无 Profile / 无 Scaffolding / 无 RAG / 无 Critic）
      - `Condition A1 (Scaffolding Base)`: WriterAgent 提示工程基准（有任务感知 Token 预算与呼吸节奏/防套话 scaffolding，无 Profile / 无 RAG / 无 Critic）
      - `Condition B (+Profile Only)`: 在 A1 基础上显式注入 Profile，无 RAG / 无 Critic（**与 A1 构成严格单变量对照：B - A1 为 Style Profile 纯先验的真正独立贡献**）
-     - `Condition C1a (+Dense RAG)`: 纯密集语义向量余弦召回（`dense_search`，严格执行 Fail-Closed 阻断，拒绝静默降级）
-     - `Condition C1b (+Hybrid RRF RAG)`: 密集与稀疏词频倒数排名融合检索（无结构类型过滤，严格单变量隔离 RRF 融合机制，已剔除零相关文档排名偏置）
-     - `Condition C2 (+Style-Aware RAG)`: 基于篇章结构的定向装配检索（`retrieve_dynamic_few_shots` 覆盖 `hook`、`quote`、`argument`，**与 C1b 构成严格单变量对照：C2 - C1b**）
-     - `Condition D (Full EchoStyle)`: **严格单变量受控与评测解耦**——复用 C2 检索快照与 C2 生成初稿 `art_c2`，由内部 Critic 自审重写；**终审由独立条件盲审评测器 (Condition-Blind Holdout Evaluator, temperature=0.0, 开启 strict Fail-Closed) 统一打分，杜绝 Critic 既当运动员又当裁判的 Evaluator Overfitting**
-   - **领域正交独立选题库 (Domain-Orthogonal Held-out Topics)**：消融评测题目涵盖职场、教育、城市生活、消费、旅行等跨领域题材，提示词仅保留纯客观任务与论述约束，彻底剥离风格特征词（无"犀利"、"体温"、"偏见"等提示），杜绝 Style Leakage。
-   - **分层方差建模与独立盲审 (Hierarchical Clustered Statistics)**：严格区分 Topic 间宏观变异与重复采样扰动，采用 Student-t 分布计算 95% 置信区间，客观呈现系统多目标权衡。
+      - `Condition C1a (+Dense RAG)`: 纯密集语义向量余弦召回（`dense_search`，与 C1b 共享完全相同的 `_dense_rank_candidates` 候选准入阈值 `score > 0`、确定性 tie-break 与候选窗口，严格执行 Fail-Closed 阻断，拒绝静默降级）
+      - `Condition C1b (+Hybrid RRF RAG)`: 密集与稀疏词频倒数排名融合检索（Dense 通道与 C1a 保持完全一致的准入规则，引入带停用词过滤与二元词加权的稀疏检索，严格单变量隔离 RRF 融合机制，剔除零相关偏置）
+      - `Condition C2 (+Style-Aware RAG)`: 基于篇章结构的定向装配检索（`retrieve_dynamic_few_shots` 覆盖 `hook`、`quote`、`argument`，**与 C1b 构成严格单变量对照：C2 - C1b**）
+      - `Condition D (Full EchoStyle)`: **严格单变量受控与评测解耦**——复用 C2 检索快照与 C2 生成初稿 `art_c2`，由内部 Critic 自审重写；**终审由独立条件盲审评测器 (Condition-Blind Holdout Evaluator, temperature=0.0, 开启 strict Fail-Closed) 统一打分，杜绝 Critic 既当运动员又当裁判的 Evaluator Overfitting**
+    - **领域正交独立选题库 (Domain-Orthogonal Held-out Topics)**：消融评测题目涵盖职场、教育、城市生活、消费、旅行等跨领域题材，提示词仅保留纯客观任务与论述约束，彻底剥离风格特征词（无"犀利"、"体温"、"偏见"等提示），杜绝 Style Leakage。
+    - **分层配对统计建模与区块级 Fail-Closed (Hierarchical Paired Delta Statistics)**：边际增量直接基于配对差值（$\Delta[t, r] = C_{k}[t, r] - C_{k-1}[t, r]$）计算，严格区分 Topic 间变异与重复采样扰动，采用 Student-t 分布计算 95% 置信区间；任何单条件失败执行整组 7 条件配对区块作废（Fail-Closed Invalidation），杜绝样本不均衡偏差。
    - **独立的 Holdout 评测模型配置支持**：评测器与内部 Critic 均支持独立模型配置 (`config.evaluator` 或 `EVALUATOR_MODEL` 环境变量)，可与生成模型解耦使用第三方模型（如 Generator: DeepSeek, Evaluator: Claude / GPT-4o），实现流程隔离与跨模型客观仲裁。
 
 
@@ -118,6 +118,18 @@ uv sync
 .\.venv\Scripts\activate
 ```
 
+复杂排版或扫描版 PDF 需要独立安装 MinerU 4（不会污染项目虚拟环境）：
+```bash
+uv tool install --python 3.12 "mineru>=4.0,<5"
+mineru-kit models download --tier basic --small-backend onnx
+```
+`standard` 本地模型约 2 GB，最低需要 8 GB 内存；本项目在普通 CPU 机器上默认使用
+`basic`（模型约 0.8 GB，最低 2 GB 内存），需要更高版面质量时再将 `config.yaml` 中的
+`mineru_tier` 改为 `standard`，并执行：
+```bash
+mineru-kit models download --tier standard --small-backend onnx --vlm-engine llama-cpp
+```
+
 ### 2. 配置文件
 编辑 `config.yaml` 填入你的大模型 API 密钥（兼容任何标准 OpenAI 协议，如 DeepSeek、OpenAI、Moonshot、Qwen 等）：
 ```yaml
@@ -163,7 +175,7 @@ python main.py benchmark --ab
 ```bash
 streamlit run src/web/app.py
 ```
-- **【Tab 1: 样文感知与提取】**：输入公众号链接、Word 或 PDF 文档，查看正文抽取与去噪清洗。
+- **【Tab 1: 样文感知与提取】**：输入公众号链接、Word `.docx` 或 PDF 文档，查看正文抽取与去噪清洗。旧版 `.doc` 请先转换为 `.docx`；公众号若要求网页验证，可上传文章正文 `.md` 文件。
 - **【Tab 2: 深度文风指纹与记忆库】**：一键解构作者的客观 Stylometrics 指标（平均句长、标准差、STTR、标点熵），并实时测试 Style Memory 的向量检索与篇章结构定向召回。
 - **【Tab 3: 智能创作与闭环评测】**：输入新主题，实时监控状态机跳转、草稿演进与 Critic 批注，查看成文与 EchoEval 多维评分卡。
 
@@ -179,6 +191,8 @@ python main.py distill -i "sample1.md" "sample2.md" -n "独立思考风"
 python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什么真挚的文风在当下更稀缺？" -o "final_article.md"
 ```
 
+新建模的档案带有持久化 `profile_id`，切片只在当前档案内检索或清空。默认记忆库为 `profiles/style_memory_v2.json`；旧 `profiles/style_memory.json` 原样保留，不自动读取、迁移或删除。缺少 ID 的旧档案仍可解析，但写作与召回前必须重新运行 `distill` 建模。LLM 裁判不可用或返回无效评分时，写作会报错终止，不会用默认分生成报告。
+
 ---
 
 ## 🧪 自动化测试验证与持续集成 (CI)
@@ -187,10 +201,10 @@ python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什�
 ```bash
 uv run pytest
 ```
-测试运行结果：**60 passed, 1 skipped (1 skipped 用于隔离真实外连网络)**。
+测试结果以 `uv run pytest` 的实际输出为准；真实外连网络测试默认跳过。
 
-- **持续集成 (GitHub Actions)**：CI 工作流已正式部署于 [`.github/workflows/pytest.yml`](.github/workflows/pytest.yml)。
-  > *注：若通过 GitHub CLI 或 PAT 提交工作流文件触发权限拦截（`refusing to allow a Personal Access Token to create or update workflow without workflow scope`），需在 GitHub Developer Settings 中为 Token 开启 `workflow` 作用域，或通过 GitHub Web 页面提交合并。*
+- **持续集成工作流模板 (CI Workflow Template)**：自动化 CI 工作流模板维护于 [`ci/pytest.yml`](ci/pytest.yml)。
+  > *注：上述测试通过数据为本地完整测试套件运行结果。若需在 GitHub 远程仓库启用 Actions 持续集成，可将 `ci/pytest.yml` 复制部署至 `.github/workflows/pytest.yml`（若使用 PAT 推送时遇到 `refusing to allow a Personal Access Token to create or update workflow without workflow scope` 权限拦截，需在 GitHub 开发者设置中为 Token 开启 `workflow` 作用域，或通过 GitHub Web 页面提交）。*
 
 
 ---
@@ -218,7 +232,7 @@ EchoStyle/
 │   ├── failure_analysis.py  # 失败案例与系统边界深度剖析
 │   ├── blind_benchmark.py   # 规范化成对盲评基准套件
 │   └── ab_benchmark.py      # 三方 A/B 对照基准
-├── tests/             # 单元与集成测试套件 (60 passed, 1 skipped)
+├── tests/             # 单元与集成测试套件
 ├── profiles/          # 文风档案、记忆切片与 Benchmark 评测报告 (Markdown / JSON)
 ├── benchmark.py       # 基准测试执行脚本
 ├── main.py            # CLI 命令行调度入口

@@ -1,4 +1,5 @@
 from typing import List
+from uuid import uuid4
 from .base import BaseAgent
 from .state import AgentState, AgentStatus
 from src.core.config import LLMConfig
@@ -43,6 +44,7 @@ class AnalystAgent(BaseAgent):
         # 3. 融合为 DeepStyleProfile
         deep_profile = DeepStyleProfile(
             name=profile_name,
+            profile_id=str(uuid4()),
             qualitative=qualitative_profile,
             quantitative=quantitative_metrics
         )
@@ -51,7 +53,7 @@ class AnalystAgent(BaseAgent):
         state.transition_to(AgentStatus.MODELING, "将样文段落进行多维切片并存入长期风格记忆库 (Style Memory)...")
         total_chunks_added = 0
         for a in sample_articles:
-            added = self.memory_manager.ingest_article(a["title"], a["content"])
+            added = self.memory_manager.ingest_article(a["title"], a["content"], profile_id=deep_profile.profile_id)
             total_chunks_added += added
         state.transition_to(AgentStatus.MODELING, f"成功向量化入库 {total_chunks_added} 个风格片段！")
 

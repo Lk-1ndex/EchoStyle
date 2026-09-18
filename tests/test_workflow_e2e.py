@@ -26,6 +26,7 @@ def test_coordinator_workflow_integration():
 
     profile = DeepStyleProfile(
         name="测试深度文风",
+        profile_id="workflow-profile-1",
         qualitative=StyleProfile(
             name="测试",
             tone_persona=TonePersona(perspective="第一人称'我'", emotional_tone="犀利直白", persona_traits=["独立思考者"]),
@@ -87,6 +88,7 @@ def test_condition_d_strict_single_variable_e2e():
 
     profile = DeepStyleProfile(
         name="消融测试文风",
+        profile_id="workflow-profile-2",
         qualitative=StyleProfile(
             name="消融",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白"),
@@ -182,6 +184,7 @@ def test_component_pipeline_smoke():
         config = AppConfig()
         profile = DeepStyleProfile(
             name="SmokeProfile",
+            profile_id="workflow-smoke-profile",
             qualitative=StyleProfile(
                 name="SmokeQual",
                 tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白", persona_traits=["独立思考"]),
@@ -234,6 +237,7 @@ def test_coordinator_real_network_integration():
 
     profile = DeepStyleProfile(
         name="RealNetworkIntegrationProfile",
+        profile_id="workflow-network-profile",
         qualitative=StyleProfile(
             name="在线集成文风",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白犀利", persona_traits=["深刻洞察"]),
@@ -265,6 +269,7 @@ def test_coordinator_network_integration_flow_with_mocked_network():
 
     profile = DeepStyleProfile(
         name="MockNetworkIntegrationProfile",
+        profile_id="workflow-mock-network-profile",
         qualitative=StyleProfile(
             name="模拟文风",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="直白犀利"),
@@ -298,5 +303,4 @@ def test_coordinator_network_integration_flow_with_mocked_network():
             assert draft == mock_article
             assert report.overall_score >= 80.0
             assert final_state.current_status == AgentStatus.COMPLETED
-
 

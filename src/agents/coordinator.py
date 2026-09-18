@@ -28,7 +28,10 @@ class CoordinatorAgent(BaseAgent):
         )
 
         # 初始化专业智能体节点
-        self.extractor_agent = ExtractorAgent(mineru_cmd=config.extractor.mineru_command)
+        self.extractor_agent = ExtractorAgent(
+            mineru_cmd=config.extractor.mineru_command,
+            mineru_tier=config.extractor.mineru_tier,
+        )
         self.analyst_agent = AnalystAgent(config.llm, self.memory_manager)
         self.writer_agent = WriterAgent(config.llm, self.memory_manager)
         self.critic_agent = CriticAgent(config.llm, quality_threshold=config.agent.quality_threshold)
@@ -72,8 +75,8 @@ class CoordinatorAgent(BaseAgent):
         sample_sources: Optional[List[str]] = None,
         topic: str = "",
         key_points: str = "",
-        word_count: int = 1500,
-        target_audience: str = "大众读者",
+        word_count: Optional[int] = None,
+        target_audience: Optional[str] = None,
         initial_draft: Optional[str] = None,
         **kwargs
     ) -> Tuple[str, EvaluationReport, AgentState]:
@@ -82,8 +85,10 @@ class CoordinatorAgent(BaseAgent):
         """
         state.topic = topic or state.topic
         state.key_points = key_points or state.key_points
-        state.word_count = word_count or state.word_count
-        state.target_audience = target_audience or state.target_audience
+        if word_count is not None:
+            state.word_count = word_count
+        if target_audience is not None:
+            state.target_audience = target_audience
         state.max_retries = self.config.agent.max_reflections
 
         state.execution_logs.append(f"[WORKFLOW] 启动任务工作流调度，目标主题: [{state.topic}]")
@@ -104,6 +109,8 @@ class CoordinatorAgent(BaseAgent):
             active_profile = self.tool_registry.get("analyze_style_tool").execute(
                 state, sample_articles=extracted_articles, profile_name="动态提炼文风"
             )
+        if not active_profile.profile_id:
+            raise ValueError("旧版文风档案没有 profile_id，请重新建模后再写作。")
 
         # 动态分支 2：创建初稿前检查点 (CheckPoint)
         state.create_checkpoint("pre_draft")
@@ -213,12 +220,16 @@ class CoordinatorAgent(BaseAgent):
     def extract_sources(self, sources: List[str], state: Optional[AgentState] = None) -> List[Dict[str, Any]]:
         st = state or AgentState()
         articles = []
+        last_error = None
         for src in sources:
             try:
                 res = self.tool_registry.get("extract_document_tool").execute(st, source=src, force_engine=self.config.extractor.pdf_engine)
                 articles.append(res)
             except Exception as e:
                 st.record_error(f"提取源 [{src}] 异常: {str(e)}")
+                last_error = e
+        if not articles and last_error is not None:
+            raise last_error
         return articles
 
     def build_style(self, sample_articles: List[Dict[str, Any]], profile_name: str = "深度文风档案", state: Optional[AgentState] = None) -> DeepStyleProfile:

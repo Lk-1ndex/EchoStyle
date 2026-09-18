@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Dict, Any
 
@@ -25,7 +24,10 @@ class DocumentInspector:
             "reason": "常规单栏文档",
         }
 
-        if ext in [".docx", ".doc", ".txt", ".md"]:
+        if ext == ".doc":
+            raise ValueError("旧版 .doc 文件暂不支持，请先转换为 .docx。")
+
+        if ext in [".docx", ".txt", ".md"]:
             result["recommended_engine"] = "markitdown"
             result["reason"] = "Word/纯文本结构清晰，极速引擎即可实现 100% 保真"
             return result
@@ -39,8 +41,8 @@ class DocumentInspector:
     @classmethod
     def _inspect_pdf(cls, path: Path, result: Dict[str, Any]):
         try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(str(path))
+            import pymupdf
+            doc = pymupdf.open(str(path))
             total_pages = len(doc)
             sample_pages = doc[:min(5, total_pages)]
 

@@ -41,6 +41,8 @@ class WriterAgent(BaseAgent):
         feedback: Optional[str] = None,
         previous_draft: Optional[str] = None,
     ) -> str:
+        if profile is not None and not profile.profile_id:
+            raise ValueError("旧版文风档案没有 profile_id，请重新建模后再写作。")
         # 1. 动态语义召回最匹配的 Few-shot 片段 (若 caller 显式传入 [] 则不执行召回)
         if state.memory_snapshot is None:
             query = f"{state.topic} {state.key_points}"
@@ -48,7 +50,9 @@ class WriterAgent(BaseAgent):
                 AgentStatus.DRAFTING if not feedback else AgentStatus.REFLECTING,
                 f"向 Style Memory 检索与选题 [{state.topic}] 契合的高光范例..."
             )
-            few_shots = self.memory_manager.retrieve_dynamic_few_shots(query, top_k=3)
+            few_shots = self.memory_manager.retrieve_dynamic_few_shots(
+                query, top_k=3, profile_id=profile.profile_id if profile else None
+            )
             state.memory_snapshot = [{"content": s} for s in few_shots]
 
         dynamic_shots = [s["content"] for s in (state.memory_snapshot or [])]

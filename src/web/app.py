@@ -88,17 +88,18 @@ with st.sidebar:
     st.session_state.config.agent.quality_threshold = quality_threshold
     st.session_state.config.agent.max_reflections = max_reflections
     st.session_state.config.extractor.pdf_engine = pdf_engine
+    st.session_state.coordinator.critic_agent.quality_threshold = quality_threshold
 
     st.markdown("---")
     st.markdown("#### 💾 长期风格记忆库 (Style Memory)")
-    stats = st.session_state.memory_mgr.get_memory_stats()
+    active_profile_id = st.session_state.deep_profile.profile_id if st.session_state.deep_profile else None
+    stats = st.session_state.memory_mgr.get_memory_stats(profile_id=active_profile_id) if active_profile_id else {"total_chunks": 0, "sources": []}
     st.write(f"• 已索引高光切片：**{stats['total_chunks']}** 个")
     st.write(f"• 历史文章来源：**{len(stats['sources'])}** 篇")
-    if stats["total_chunks"] > 0:
-        if st.button("🗑️ 清空记忆库", help="重置所有历史切片索引"):
-            st.session_state.memory_mgr.clear_memory()
-            st.success("记忆库已清空！")
-            st.rerun()
+    if st.button("🗑️ 清空当前档案记忆库", disabled=not active_profile_id or stats["total_chunks"] == 0, help="仅重置当前档案的切片索引"):
+        st.session_state.memory_mgr.clear_memory(profile_id=active_profile_id)
+        st.success("当前档案记忆库已清空！")
+        st.rerun()
 
 # ================= 页面主标题 =================
 st.title("🧬 EchoStyle 2.0: 基于 Multi-Agent 与风格记忆库的个人文风克隆系统")
@@ -126,40 +127,51 @@ with tab1:
     with col2:
         st.markdown("##### 来源 B：本地 Word 或 PDF 文档")
         uploaded_files = st.file_uploader(
-            "上传本地文档 (.docx, .pdf, .txt)",
-            type=["docx", "doc", "pdf", "txt", "md"],
+            "上传本地文档 (.docx, .pdf, .txt, .md)",
+            type=["docx", "pdf", "txt", "md"],
             accept_multiple_files=True,
         )
 
     if st.button("🚀 启动 Extractor Agent 进行自适应解析", type="primary"):
         new_sources = []
+        temp_paths = []
+        uploaded_titles = {}
         ctx = AgentContext()
 
-        # 收集输入
-        if wechat_urls_text.strip():
-            for line in wechat_urls_text.strip().split("\n"):
-                u = line.strip()
-                if u:
-                    new_sources.append(u)
+        try:
+            # 收集输入
+            if wechat_urls_text.strip():
+                for line in wechat_urls_text.strip().split("\n"):
+                    u = line.strip()
+                    if u:
+                        new_sources.append(u)
 
-        if uploaded_files:
-            for uf in uploaded_files:
-                suffix = Path(uf.name).suffix.lower()
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp.write(uf.getvalue())
-                    tmp_path = tmp.name
-                new_sources.append(tmp_path)
+            if uploaded_files:
+                for uf in uploaded_files:
+                    suffix = Path(uf.name).suffix.lower()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        temp_paths.append(Path(tmp.name))
+                        tmp.write(uf.getvalue())
+                    new_sources.append(tmp.name)
+                    uploaded_titles[Path(tmp.name).stem] = Path(uf.name).stem
 
-        if not new_sources:
-            st.warning("请至少提供一个公众号链接或上传一个文件！")
-        else:
-            with st.spinner("Extractor Agent 正在分析排版布局、去噪清洗并修补断行..."):
-                try:
-                    articles = st.session_state.coordinator.extract_sources(new_sources, context=ctx)
+            if not new_sources:
+                st.warning("请至少提供一个公众号链接或上传一个文件！")
+            else:
+                with st.spinner("Extractor Agent 正在分析排版布局、去噪清洗并修补断行..."):
+                    articles = st.session_state.coordinator.extract_sources(new_sources, state=ctx)
+                    for article in articles:
+                        article["title"] = uploaded_titles.get(article["title"], article["title"])
                     st.session_state.samples.extend(articles)
                     st.success(f"成功提取并清洗 {len(articles)} 篇样文！")
-                except Exception as e:
-                    st.error(f"提取失败: {e}")
+        except Exception as e:
+            st.error(f"提取失败: {e}")
+        finally:
+            for temp_path in temp_paths:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError as e:
+                    st.warning(f"上传临时文件清理失败: {e}")
 
         # 显示日志
         if ctx.execution_logs:
@@ -193,9 +205,12 @@ with tab2:
                         deep_profile = st.session_state.coordinator.build_style(
                             st.session_state.samples,
                             profile_name=profile_name,
-                            context=ctx
+                            state=ctx
                         )
                         st.session_state.deep_profile = deep_profile
+                        st.session_state.pop("final_art", None)
+                        st.session_state.pop("eval_report", None)
+                        st.session_state.pop("agent_ctx", None)
                         st.success("深度文风建模完成！语料已同步摄入长期记忆库。")
                     except Exception as e:
                         st.error(f"建模失败: {e}")
@@ -250,8 +265,12 @@ with tab2:
         # 3. 记忆库在线检索测试
         st.markdown("#### 🔍 3. 长期风格记忆库 (Style Memory) 动态检索测试")
         test_query = st.text_input("输入一个模拟创作主题，测试动态召回的历史片段", value="技术的本质与独立思考")
-        if st.button("执行检索测试"):
-            matched_snippets = st.session_state.memory_mgr.retrieve_dynamic_few_shots(test_query, top_k=3)
+        if not dp.profile_id:
+            st.warning("旧版文风档案缺少 profile_id，请重新建模后再检索或写作。")
+        if st.button("执行检索测试", disabled=not dp.profile_id):
+            matched_snippets = st.session_state.memory_mgr.retrieve_dynamic_few_shots(
+                test_query, top_k=3, profile_id=dp.profile_id
+            )
             if matched_snippets:
                 for idx, snip in enumerate(matched_snippets, 1):
                     st.success(f"**动态召回高光段落 {idx}**：\n\n> {snip}")
@@ -262,8 +281,8 @@ with tab2:
 with tab3:
     st.subheader("Writer Agent 创作 + Critic Agent 质检反思闭环")
 
-    if not st.session_state.deep_profile:
-        st.info("💡 请先在第二步提炼深度文风档案！")
+    if not st.session_state.deep_profile or not st.session_state.deep_profile.profile_id:
+        st.info("💡 请先在第二步重新建模深度文风档案！" if st.session_state.deep_profile else "💡 请先在第二步提炼深度文风档案！")
     else:
         topic = st.text_input("新文章主题", placeholder="例如：在被大模型充斥的世界，为什么独特的个人文风更稀缺？")
         key_points = st.text_area(
@@ -284,7 +303,10 @@ with tab3:
             elif not st.session_state.config.llm.api_key:
                 st.error("请配置 API Key！")
             else:
+                st.session_state.pop("final_art", None)
+                st.session_state.pop("eval_report", None)
                 ctx = AgentContext()
+                st.session_state.agent_ctx = ctx
                 with st.spinner("Coordinator Agent 正在统筹 Writer 创作、向量记忆检索及 Critic 质检反思..."):
                     try:
                         final_art, report, ctx = st.session_state.coordinator.generate_article(
@@ -293,7 +315,7 @@ with tab3:
                             key_points=key_points,
                             word_count=words,
                             target_audience=audience,
-                            context=ctx
+                            state=ctx
                         )
                         st.session_state.final_art = final_art
                         st.session_state.eval_report = report

@@ -3,6 +3,7 @@ from .state import AgentState, AgentStatus
 from .tools import CritiqueAction
 from src.core.config import LLMConfig
 from src.core.models import DeepStyleProfile, EvaluationReport
+from src.core.exceptions import EvaluationUnavailableError
 from src.evaluation.judge import LLMJudge
 
 
@@ -21,7 +22,12 @@ class CriticAgent(BaseAgent):
         """评估并返回结构化决策动作"""
         state.transition_to(AgentStatus.CRITIQUING, "启动 EchoEval 多维质量测评与决策推断...")
 
-        report = self.judge.evaluate(draft, profile)
+        try:
+            report = self.judge.evaluate(draft, profile)
+        except EvaluationUnavailableError as exc:
+            state.latest_report = None
+            state.transition_to(AgentStatus.FAILED, f"裁判服务不可用，评测失败: {exc}")
+            raise
         state.latest_report = report
 
         # 更新最新草稿节点
@@ -57,7 +63,12 @@ class CriticAgent(BaseAgent):
         """独立评估草稿并返回 EvaluationReport"""
         if state is None:
             state = AgentState()
-        return self.judge.evaluate(draft, profile)
+        try:
+            return self.judge.evaluate(draft, profile)
+        except EvaluationUnavailableError as exc:
+            state.latest_report = None
+            state.transition_to(AgentStatus.FAILED, f"裁判服务不可用，评测失败: {exc}")
+            raise
 
     def run(self, state: AgentState, draft: str, profile: DeepStyleProfile) -> EvaluationReport:
         """兼容原有调用的基础接口"""

@@ -20,6 +20,7 @@ htmlcov/
 
 # 临时生成文件与本地数据
 profiles/*.json
+profiles/*.lock
 profiles/*.md
 profiles/benchmark_samples/
 *.log

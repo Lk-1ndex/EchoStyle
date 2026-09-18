@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple
@@ -20,6 +21,8 @@ from rich.table import Table
 
 from src.core.config import load_config
 from src.core.model_provider import ModelProvider
+from src.memory.memory_manager import MemoryManager
+from src.memory.vector_store import VectorStore
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.state import AgentState
 from src.analyzer.stylometrics import StylometricsAnalyzer
@@ -151,12 +154,15 @@ def _calc_hierarchical_stats(topic_runs: List[List[float]]) -> HierarchicalStat:
     if K == 0:
         return HierarchicalStat(0.0, 0.0, 0.0, 0.0, 0.0)
 
+    valid_runs = [runs for runs in topic_runs if runs and len(runs) > 0]
+    valid_k = len(valid_runs)
+    if valid_k == 0:
+        return HierarchicalStat(0.0, 0.0, 0.0, 0.0, 0.0)
+
     topic_means = []
     within_variances = []
-    for runs in topic_runs:
+    for runs in valid_runs:
         r = len(runs)
-        if r == 0:
-            continue
         m = sum(runs) / r
         topic_means.append(m)
         if r > 1:
@@ -165,14 +171,10 @@ def _calc_hierarchical_stats(topic_runs: List[List[float]]) -> HierarchicalStat:
         else:
             within_variances.append(0.0)
 
-    valid_k = len(topic_means)
-    if valid_k == 0:
-        return HierarchicalStat(0.0, 0.0, 0.0, 0.0, 0.0)
-
     mean = sum(topic_means) / valid_k
     if valid_k == 1:
-        # 单一主题降级为轮次内采样方差
-        r_list = topic_runs[0]
+        # 单一主题降级为轮次内采样方差 (使用首个有效主题采样数据，严禁硬取 index 0)
+        r_list = valid_runs[0]
         r_n = len(r_list)
         if r_n <= 1:
             return HierarchicalStat(round(mean, 2), 0.0, 0.0, 0.0, 0.0)
@@ -209,48 +211,57 @@ def _calc_hierarchical_stats(topic_runs: List[List[float]]) -> HierarchicalStat:
     )
 
 
-def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]], is_simulation: bool = False) -> str:
-    """依据分层统计数据生成多目标权衡分析；在仿真模式下严格采用流程验证措辞，拒绝将桩数据表述为实测结论"""
-    a0_echo, a0_echo_std, _ = summary["A0"]["echo"][:3]
-    a1_echo, a1_echo_std, _ = summary["A1"]["echo"][:3]
-    b_echo, b_echo_std, _ = summary["B"]["echo"][:3]
-    c1a_echo, c1a_echo_std, _ = summary["C1a"]["echo"][:3]
-    c1b_echo, c1b_echo_std, _ = summary["C1b"]["echo"][:3]
-    c2_echo, c2_echo_std, _ = summary["C2"]["echo"][:3]
-    d_echo, d_echo_std, _ = summary["D"]["echo"][:3]
+def _generate_empirical_analysis(
+    summary: Dict[str, Dict[str, HierarchicalStat]],
+    delta_summary: Optional[Dict[str, HierarchicalStat]] = None,
+    is_simulation: bool = False,
+    valid_pairs: int = 0,
+    attempted_pairs: int = 0,
+) -> str:
+    """依据配对分层统计数据生成多目标权衡分析；在仿真模式下严格采用流程验证措辞，拒绝将桩数据表述为实测结论"""
+    if delta_summary is None:
+        delta_summary = {
+            "scaffolding": HierarchicalStat(round(summary["A1"]["echo"].mean - summary["A0"]["echo"].mean, 2), 0.0, 0.0),
+            "profile": HierarchicalStat(round(summary["B"]["echo"].mean - summary["A1"]["echo"].mean, 2), 0.0, 0.0),
+            "dense": HierarchicalStat(round(summary["C1a"]["echo"].mean - summary["B"]["echo"].mean, 2), 0.0, 0.0),
+            "rrf": HierarchicalStat(round(summary["C1b"]["echo"].mean - summary["C1a"]["echo"].mean, 2), 0.0, 0.0),
+            "style_filter": HierarchicalStat(round(summary["C2"]["echo"].mean - summary["C1b"]["echo"].mean, 2), 0.0, 0.0),
+            "critic": HierarchicalStat(round(summary["D"]["echo"].mean - summary["C2"]["echo"].mean, 2), 0.0, 0.0),
+        }
 
-    c1a_disc = summary["C1a"]["discourse"][0]
-    c1b_disc = summary["C1b"]["discourse"][0]
-    c2_disc = summary["C2"]["discourse"][0]
-    d_disc = summary["D"]["discourse"][0]
+    c2_echo = summary["C2"]["echo"].mean
+    d_echo = summary["D"]["echo"].mean
 
-    c1a_rhy = summary["C1a"]["rhythm"][0]
-    c1b_rhy = summary["C1b"]["rhythm"][0]
-    c2_rhy = summary["C2"]["rhythm"][0]
-    d_rhy = summary["D"]["rhythm"][0]
+    c1a_disc = summary["C1a"]["discourse"].mean
+    c1b_disc = summary["C1b"]["discourse"].mean
+    c2_disc = summary["C2"]["discourse"].mean
+    d_disc = summary["D"]["discourse"].mean
 
-    c2_pen = summary["C2"]["penalty"][0]
-    d_pen = summary["D"]["penalty"][0]
+    c1a_rhy = summary["C1a"]["rhythm"].mean
+    c1b_rhy = summary["C1b"]["rhythm"].mean
+    c2_rhy = summary["C2"]["rhythm"].mean
+    d_rhy = summary["D"]["rhythm"].mean
 
-    # 1. 严格单变量消融核心步进收益 (A0 -> A1 -> B -> C1a -> C1b -> C2 -> D)
-    scaffolding_gain = a1_echo - a0_echo
-    profile_gain = b_echo - a1_echo        # 严格单变量：控制 Scaffolding 一致后 Profile 净贡献
-    dense_gain = c1a_echo - b_echo
-    rrf_gain = c1b_echo - c1a_echo
-    style_filter_gain = c2_echo - c1b_echo  # 严格单变量：C2 - C1b 隔离结构过滤
-    critic_gain = d_echo - c2_echo
+    c2_pen = summary["C2"]["penalty"].mean
+    d_pen = summary["D"]["penalty"].mean
+
+    ds = delta_summary
+
+    def _ci(key: str) -> str:
+        s = ds[key]
+        return f"[{s.mean - s.ci95:+.1f}, {s.mean + s.ci95:+.1f}]"
 
     if is_simulation:
         verdict_lines = [
-            f"- **Writer Scaffolding 提示工程基准管道 (A1 - A0)**: 差值为 {scaffolding_gain:+.1f} 分，用于验证分析管道对 Writer 提示工程与 Token 预算识别通路；",
-            f"- **Style Profile 纯先验管道 (B - A1)**: 差值为 {profile_gain:+.1f} 分，用于验证控制 Scaffolding 变量后对 Style Profile 纯先验的单变量净贡献识别通路；",
-            f"- **Dense 语义检索基准管道 (C1a - B)**: 差值为 {dense_gain:+.1f} 分，用于验证分析管道对段落连续性与句长节奏吻合度 (Rhythm) 维度的敏感度识别；",
-            f"- **Sparse/RRF 融合管道 (C1b - C1a)**: 差值为 {rrf_gain:+.1f} 分，用于验证分析管道在剔除零相关文档排名偏置后的词频融合识别；",
-            f"- **Style-Aware 结构过滤管道 (C2 - C1b)**: 差值为 {style_filter_gain:+.1f} 分，用于验证分析管道对结构定向过滤与句长离散度变动的权衡捕获能力（严格控制 RRF 变量）；",
-            f"- **Critic 闭环反思管道 (D - C2)**: 差值为 {critic_gain:+.1f} 分，用于验证分析管道对 FSM 反思重写与条件盲审评测器 (Condition-Blind Holdout Evaluator) 的打分闭环通路。",
+            f"- **Writer Scaffolding 提示工程基准管道 (A1 - A0)**: 配对差值 Δ = {ds['scaffolding'].mean:+.1f} 分 (95% CI: {_ci('scaffolding')})，用于验证分析管道对 Writer 提示工程与 Token 预算识别通路；",
+            f"- **Style Profile 纯先验管道 (B - A1)**: 配对差值 Δ = {ds['profile'].mean:+.1f} 分 (95% CI: {_ci('profile')})，用于验证控制 Scaffolding 变量后对 Style Profile 纯先验的单变量配对净贡献识别通路；",
+            f"- **Dense 语义检索基准管道 (C1a - B)**: 配对差值 Δ = {ds['dense'].mean:+.1f} 分 (95% CI: {_ci('dense')})，用于验证分析管道对段落连续性与句长节奏吻合度 (Rhythm) 维度的敏感度识别；",
+            f"- **Sparse/RRF 融合管道 (C1b - C1a)**: 配对差值 Δ = {ds['rrf'].mean:+.1f} 分 (95% CI: {_ci('rrf')})，用于验证分析管道在剔除零相关文档排名偏置后的词频融合识别；",
+            f"- **Style-Aware 结构过滤管道 (C2 - C1b)**: 配对差值 Δ = {ds['style_filter'].mean:+.1f} 分 (95% CI: {_ci('style_filter')})，用于验证分析管道对结构定向过滤与句长离散度变动的权衡捕获能力（严格控制 RRF 变量）；",
+            f"- **Critic 闭环反思管道 (D - C2)**: 配对差值 Δ = {ds['critic'].mean:+.1f} 分 (95% CI: {_ci('critic')})，用于验证分析管道对 FSM 反思重写与条件盲审评测器 (Condition-Blind Holdout Evaluator) 的打分闭环通路。",
         ]
         echo_verdict = "\n".join(verdict_lines)
-        return f"""## 二、 仿真数据流程验证与分析管道测试 (Simulation Pipeline Verification)
+        return f"""## 三、 仿真数据流程验证与分析管道测试 (Simulation Pipeline Verification)
 
 仿真数据用于验证分析管道能够识别以下差异（仅用于工程流水线与分层统计验证，绝非真实实测结论）：
 {echo_verdict}
@@ -264,19 +275,19 @@ def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]]
    桩数据设定展示了分析管道对状态机反思重写前后得分变动与套话拦截的捕获逻辑（设定差值 {d_echo - c2_echo:+.1f} 分）。
 
 ### 管道验证说明（仅限工程流水线层面）：
-- **严格单变量消融隔离**：设立 A0 (Vanilla LLM) 与 A1 (Scaffolding Base)，确保 B - A1 为 Style Profile 纯先验的真正独立贡献识别通路，同时严格分离 RRF 融合 (C1b - C1a) 与结构过滤 (C2 - C1b) 的各自独立效应；
+- **严格配对设计与区块完整性**：执行七条件全配对设计，任何单条件失败直接作废整组 7 条件配对块 (Fail-Closed Paired Block)；统计采用每个配对样本差值 Δ 及其 Student-t 95% 置信区间；
 - **自适应检索平滑注入**：工程架构支持从单纯的'结构标签硬拼接'演进为'**韵律平滑感知的自适应检索注入 (Rhythm-Smoothed Retrieval Injection)**'，自适应调节上下文长度比例以避免节奏方差震荡；
 - **分层方差建模与条件盲审**：确立 Topic 间宏观方差与采样噪声的分层统计框架，由脱离生成链路的 Condition-Blind Holdout Evaluator 统一盲评，消除评测过拟合；
 - **免责说明**：以上内容仅为离线流水线功能与统计公式验证，不代表真实模型性能；真实科学结论请在配置有效 API Key 后运行在线实测。
 """
     else:
         verdict_lines = [
-            f"- **Writer Scaffolding 提示工程基准 (A1 - A0)**: 增量为 {scaffolding_gain:+.1f} 分，体现 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的基准增益；",
-            f"- **Style Profile 纯先验严格单变量贡献 (B - A1)**: 增量为 {profile_gain:+.1f} 分（**严格控制 Scaffolding 变量后的独立净贡献**）；",
-            f"- **Dense 语义检索基线 (C1a - B)**: 增量为 {dense_gain:+.1f} 分，在段落连续性与句长节奏吻合度 (Rhythm: {c1a_rhy:.1f}) 维度表现优异；",
-            f"- **Sparse/RRF 融合边际效应 (C1b - C1a)**: 增量为 {rrf_gain:+.1f} 分，体现了在无结构过滤且剔除零相关文档排名偏置后的词频融合贡献；",
-            f"- **Style-Aware 结构过滤独立效应 (C2 - C1b)**: 增量为 {style_filter_gain:+.1f} 分（**严格控制 RRF 变量后的结构定向过滤净贡献**）；",
-            f"- **Critic 闭环反思净增益 (D - C2)**: 增量为 {critic_gain:+.1f} 分（由未参与重写的 Condition-Blind Holdout Evaluator 进行条件盲审裁决）。",
+            f"- **Writer Scaffolding 提示工程基准 (A1 - A0)**: 配对增量 Δ = {ds['scaffolding'].mean:+.1f} 分 (95% CI: {_ci('scaffolding')})，体现 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的基准增益；",
+            f"- **Style Profile 纯先验严格单变量贡献 (B - A1)**: 配对增量 Δ = {ds['profile'].mean:+.1f} 分 (95% CI: {_ci('profile')})（**严格控制 Scaffolding 变量后的配对独立净贡献**）；",
+            f"- **Dense 语义检索基线 (C1a - B)**: 配对增量 Δ = {ds['dense'].mean:+.1f} 分 (95% CI: {_ci('dense')})，在段落连续性与句长节奏吻合度 (Rhythm: {c1a_rhy:.1f}) 维度表现优异；",
+            f"- **Sparse/RRF 融合边际效应 (C1b - C1a)**: 配对增量 Δ = {ds['rrf'].mean:+.1f} 分 (95% CI: {_ci('rrf')})，体现了在共享 Dense 准入规则下词频融合的纯配对边际贡献；",
+            f"- **Style-Aware 结构过滤独立效应 (C2 - C1b)**: 配对增量 Δ = {ds['style_filter'].mean:+.1f} 分 (95% CI: {_ci('style_filter')})（**严格控制 RRF 变量后的结构定向过滤配对净贡献**）；",
+            f"- **Critic 闭环反思净增益 (D - C2)**: 配对增量 Δ = {ds['critic'].mean:+.1f} 分 (95% CI: {_ci('critic')})（由未参与重写的 Condition-Blind Holdout Evaluator 进行条件盲审裁决）。",
         ]
         echo_verdict = "\n".join(verdict_lines)
 
@@ -330,7 +341,7 @@ def _generate_empirical_analysis(summary: Dict[str, Dict[str, HierarchicalStat]]
                 f"反思重写虽压制了违规词汇，但也带来生成策略偏向保守防御的轻微副作用。"
             )
 
-        return f"""## 二、 客观实验事实与科学归因分析 (Empirical Findings & Tradeoff Analysis)
+        return f"""## 三、 客观实验事实与科学归因分析 (Empirical Findings & Tradeoff Analysis)
 
 实测数据揭示了严格单变量消融下的系统多目标权衡：
 {echo_verdict}
@@ -380,6 +391,23 @@ def run_ablation_study(
     repeats: int = 5,
     simulate: bool = False,
     output_path: Optional[str] = None,
+):
+    with tempfile.TemporaryDirectory(prefix="echostyle_ablation_") as temp_dir:
+        return _run_ablation_study(
+            topics_count=topics_count,
+            repeats=repeats,
+            simulate=simulate,
+            output_path=output_path,
+            private_storage_path=str(Path(temp_dir) / "style_memory.json"),
+        )
+
+
+def _run_ablation_study(
+    topics_count: int,
+    repeats: int,
+    simulate: bool,
+    output_path: Optional[str],
+    private_storage_path: str,
 ):
     console.print(Panel.fit(
         "[bold cyan]EchoStyle 3.2 — 严格单变量消融实验套件 (Strict Single-Variable Matrix)[/bold cyan]\n"
@@ -431,10 +459,22 @@ def run_ablation_study(
         }
         for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]
     }
+    # 记录严格配对单变量差值结构: {comp: [[topic0_rep1..repN], [topic1_rep1..repN], ...]}
+    delta_records: Dict[str, List[List[float]]] = {
+        comp: [[] for _ in range(num_topics)]
+        for comp in ["scaffolding", "profile", "dense", "rrf", "style_filter", "critic"]
+    }
+    attempted_pairs = 0
+    valid_pairs = 0
 
     if not is_simulation:
         provider = ModelProvider(config.llm, config.embedding)
-        coordinator = CoordinatorAgent(config)
+        private_store = VectorStore(
+            storage_path=private_storage_path,
+            embedding_config=config.embedding,
+            llm_config=config.llm,
+        )
+        coordinator = CoordinatorAgent(config, memory_manager=MemoryManager(vector_store=private_store))
         # P0-3 修复：独立条件盲审评测器，temperature=0.0，且开启 strict 模式（Fail-Closed，严禁默认好成绩）
         independent_evaluator = IndependentEvaluator(config.get_evaluator_config(), strict=True)
 
@@ -451,8 +491,7 @@ def run_ablation_study(
             ))
             sys.exit(1)
 
-        # 确保消融实验内存库纯净独立，防止历史运行遗留切片污染
-        coordinator.memory_manager.clear_memory()
+        # 此实验的临时记忆库与默认长期库物理隔离。
         deep_profile = coordinator.build_style(raw_samples, profile_name="Ablation_Profile", state=AgentState())
 
         for t_idx, item in enumerate(selected_topics):
@@ -460,6 +499,7 @@ def run_ablation_study(
             t_points = item["key_points"]
 
             for rep in range(1, repeats + 1):
+                attempted_pairs += 1
                 console.print(f"[bold yellow]>> 正在运行 Topic {t_idx + 1}/{num_topics} (轮次 {rep}/{repeats}): [{t_topic[:20]}...][/bold yellow]")
 
                 # 1. Condition A0: Vanilla Baseline 0 (纯通用外部基线)
@@ -480,7 +520,8 @@ def run_ablation_study(
                 # 4. Condition C1a: +Dense RAG (纯密集向量余弦检索)
                 state_c1a = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c1a_few_shots = coordinator.memory_manager.retrieve_dense(
-                    query=f"{t_topic} {t_points}", top_k=3, target_type=None
+                    query=f"{t_topic} {t_points}", top_k=3, target_type=None, require_dense=True,
+                    profile_id=deep_profile.profile_id,
                 )
                 state_c1a.memory_snapshot = [{"content": s} for s in c1a_few_shots]
                 art_c1a = coordinator.writer_agent.generate(state_c1a, deep_profile)
@@ -488,7 +529,8 @@ def run_ablation_study(
                 # 5. Condition C1b: +Hybrid RRF RAG (Dense + Sparse RRF 融合，剔除零相关文档偏置)
                 state_c1b = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c1b_few_shots = coordinator.memory_manager.retrieve_hybrid(
-                    query=f"{t_topic} {t_points}", top_k=3, target_type=None, require_dense=True
+                    query=f"{t_topic} {t_points}", top_k=3, target_type=None, require_dense=True,
+                    profile_id=deep_profile.profile_id,
                 )
                 state_c1b.memory_snapshot = [{"content": s} for s in c1b_few_shots]
                 art_c1b = coordinator.writer_agent.generate(state_c1b, deep_profile)
@@ -496,7 +538,8 @@ def run_ablation_study(
                 # 6. Condition C2: +Style-Aware RAG (结构定向装配)
                 state_c2 = AgentState(topic=t_topic, key_points=t_points, word_count=1000)
                 c2_few_shots = coordinator.memory_manager.retrieve_dynamic_few_shots(
-                    query=f"{t_topic} {t_points}", top_k=3, require_dense=True
+                    query=f"{t_topic} {t_points}", top_k=3, require_dense=True,
+                    profile_id=deep_profile.profile_id,
                 )
                 state_c2.memory_snapshot = [{"content": s} for s in c2_few_shots]
                 art_c2 = coordinator.writer_agent.generate(state_c2, deep_profile)
@@ -510,28 +553,44 @@ def run_ablation_study(
                     initial_draft=art_c2,
                 )
 
-                # 统一由 Condition-Blind Holdout Evaluator 进行严格条件盲审打分 (Fail-Closed，排除失败样本，杜绝默认分伪造)
+                # 统一由 Condition-Blind Holdout Evaluator 进行严格条件盲审打分 (Fail-Closed 配对区块阻断)
                 cond_runs = [
                     ("A0", art_a0), ("A1", art_a1), ("B", art_b),
                     ("C1a", art_c1a), ("C1b", art_c1b), ("C2", art_c2), ("D", art_d)
                 ]
+                block_res = {}
+                block_failed = False
                 for code, art in cond_runs:
                     res = _evaluate_condition_run(independent_evaluator, art, deep_profile, ground_truth_metrics)
-                    if res is not None:
-                        condition_records[code]["echo"][t_idx].append(res.echo_score)
-                        condition_records[code]["discourse"][t_idx].append(res.discourse_fit)
-                        condition_records[code]["rhythm"][t_idx].append(res.rhythm_match)
-                        condition_records[code]["lexical"][t_idx].append(res.lexical_authenticity)
-                        condition_records[code]["penalty"][t_idx].append(res.cliche_penalty)
-                    else:
-                        console.print(f"[yellow]⚠️ Condition {code} Topic {t_idx + 1} 采样评测不可用，已排除该次采样（拒绝默认好成绩污染）。[/yellow]")
+                    if res is None:
+                        block_failed = True
+                        console.print(f"[yellow]⚠️ Condition {code} Topic {t_idx + 1} 轮次 {rep} 评测失败，按配对严谨性作废该完整 7 条件区块 (Fail-Closed Paired Block)。[/yellow]")
+                        break
+                    block_res[code] = res
 
-        # 检查各 Condition 是否存在有效评测数据
-        for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]:
-            total_samples = sum(len(topic_list) for topic_list in condition_records[code]["echo"])
-            if total_samples == 0:
-                from src.core.exceptions import EvaluationUnavailableError
-                raise EvaluationUnavailableError(f"消融条件 [{code}] 的所有评测采样均因裁判服务异常而失败，无法生成有效报告。")
+                if block_failed:
+                    continue
+
+                valid_pairs += 1
+                for code, res in block_res.items():
+                    condition_records[code]["echo"][t_idx].append(res.echo_score)
+                    condition_records[code]["discourse"][t_idx].append(res.discourse_fit)
+                    condition_records[code]["rhythm"][t_idx].append(res.rhythm_match)
+                    condition_records[code]["lexical"][t_idx].append(res.lexical_authenticity)
+                    condition_records[code]["penalty"][t_idx].append(res.cliche_penalty)
+
+                # 记录严格配对差值 Δ
+                delta_records["scaffolding"][t_idx].append(round(block_res["A1"].echo_score - block_res["A0"].echo_score, 2))
+                delta_records["profile"][t_idx].append(round(block_res["B"].echo_score - block_res["A1"].echo_score, 2))
+                delta_records["dense"][t_idx].append(round(block_res["C1a"].echo_score - block_res["B"].echo_score, 2))
+                delta_records["rrf"][t_idx].append(round(block_res["C1b"].echo_score - block_res["C1a"].echo_score, 2))
+                delta_records["style_filter"][t_idx].append(round(block_res["C2"].echo_score - block_res["C1b"].echo_score, 2))
+                delta_records["critic"][t_idx].append(round(block_res["D"].echo_score - block_res["C2"].echo_score, 2))
+
+        # 检查是否存在有效配对数据
+        if valid_pairs == 0:
+            from src.core.exceptions import EvaluationUnavailableError
+            raise EvaluationUnavailableError("消融实验中所有配对测试块均因评测裁判服务异常而失败，无法生成有效配对统计报告。")
 
     else:
         # 离线模拟数据：多主题分层模拟，如实反映客观权衡 (C1a > C1b > C2 ≈ D)
@@ -591,15 +650,28 @@ def run_ablation_study(
         for t_idx in range(num_topics):
             preset = sim_presets[t_idx % len(sim_presets)]
             for rep in range(repeats):
+                attempted_pairs += 1
+                valid_pairs += 1
                 # 产生基于独立采样的扰动方差 (Sampling Noise)
                 rep_noise = round(math.sin(rep * 1.7 + t_idx * 1.1) * 1.2 + (rep - repeats / 2.0) * 0.2, 2)
+                block_echo = {}
                 for code in ["A0", "A1", "B", "C1a", "C1b", "C2", "D"]:
                     echo, disc, rhy, lex, pen = preset[code]
-                    condition_records[code]["echo"][t_idx].append(round(echo + rep_noise, 1))
+                    echo_val = round(echo + rep_noise, 1)
+                    block_echo[code] = echo_val
+                    condition_records[code]["echo"][t_idx].append(echo_val)
                     condition_records[code]["discourse"][t_idx].append(round(disc + rep_noise * 0.5, 1))
                     condition_records[code]["rhythm"][t_idx].append(round(rhy + rep_noise * 0.4, 1))
                     condition_records[code]["lexical"][t_idx].append(round(lex + rep_noise * 0.2, 1))
                     condition_records[code]["penalty"][t_idx].append(round(pen, 1))
+
+                # 严格配对差值
+                delta_records["scaffolding"][t_idx].append(round(block_echo["A1"] - block_echo["A0"], 2))
+                delta_records["profile"][t_idx].append(round(block_echo["B"] - block_echo["A1"], 2))
+                delta_records["dense"][t_idx].append(round(block_echo["C1a"] - block_echo["B"], 2))
+                delta_records["rrf"][t_idx].append(round(block_echo["C1b"] - block_echo["C1a"], 2))
+                delta_records["style_filter"][t_idx].append(round(block_echo["C2"] - block_echo["C1b"], 2))
+                delta_records["critic"][t_idx].append(round(block_echo["D"] - block_echo["C2"], 2))
 
     # 3. 聚合各条件分层统计量 (Hierarchical Stat: Mean, Between-Std, 95% CI, Within-Std)
     summary: Dict[str, Dict[str, HierarchicalStat]] = {}
@@ -611,6 +683,12 @@ def run_ablation_study(
             "lexical": _calc_hierarchical_stats(condition_records[code]["lexical"]),
             "penalty": _calc_hierarchical_stats(condition_records[code]["penalty"]),
         }
+
+    # 聚合核心组件配对单变量效应分层统计量
+    delta_summary: Dict[str, HierarchicalStat] = {
+        comp: _calc_hierarchical_stats(delta_records[comp])
+        for comp in ["scaffolding", "profile", "dense", "rrf", "style_filter", "critic"]
+    }
 
     # 4. 打印消融实验实测矩阵
     title_suffix = " [离线模拟模式 MOCK - 流程验证]" if is_simulation else " [真实实测 REAL - 在线评测]"
@@ -658,87 +736,42 @@ def run_ablation_study(
 
     console.print(table)
 
-    # 5. 组件严格单变量边际增益分析
-    mean_a0 = summary["A0"]["echo"].mean
-    mean_a1 = summary["A1"]["echo"].mean
-    mean_b = summary["B"]["echo"].mean
-    mean_c1a = summary["C1a"]["echo"].mean
-    mean_c1b = summary["C1b"]["echo"].mean
-    mean_c2 = summary["C2"]["echo"].mean
-    mean_d = summary["D"]["echo"].mean
-
-    gain_scaffolding = mean_a1 - mean_a0
-    gain_profile = mean_b - mean_a1        # 严格单变量：控制 Scaffolding 一致后 Profile 净贡献
-    gain_dense = mean_c1a - mean_b
-    gain_rrf = mean_c1b - mean_c1a
-    gain_style_filter = mean_c2 - mean_c1b  # 严格单变量比较：C2 - C1b，隔离结构过滤
-    gain_critic = mean_d - mean_c2
-
-    contrib_table = Table(title="核心组件严格单变量边际增益分析 (Strict Single-Variable Marginal Gains)")
+    # 5. 核心组件配对单变量效应与置信区间表格 (Paired Single-Variable Deltas & 95% CI)
+    contrib_table = Table(title="核心组件配对单变量效应与置信区间 (Paired Single-Variable Deltas & 95% CI)")
     contrib_table.add_column("对比组", style="cyan bold", width=12)
     contrib_table.add_column("验证自变量", style="white", width=28)
-    contrib_table.add_column("EchoScore 净增益", style="bold", justify="right", width=18)
+    contrib_table.add_column("配对均值 Δ (Mean Delta)", style="bold", justify="right", width=20)
+    contrib_table.add_column("95% 置信区间 (Student-t)", justify="center", width=22)
+    contrib_table.add_column("跨主题标准差", justify="right", width=14)
     contrib_table.add_column("客观机制与多目标权衡解释", style="yellow")
 
-    def fmt_gain(val: float) -> str:
-        return f"{val:+.1f} 分"
+    comp_meta = [
+        ("A1 vs A0", "Writer Scaffolding 提示工程基准", "scaffolding",
+         "隔离 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的独立贡献"),
+        ("B vs A1", "Style Profile 纯先验 (严格单变量)", "profile",
+         "在保持 WriterAgent Scaffolding 完全一致的条件下，纯 Style Profile 先验的真正配对独立净贡献"),
+        ("C1a vs B", "Dense RAG 纯语义检索", "dense",
+         "引入连续语料段落；上下文平稳连续，句长节奏吻合度 (Rhythm) 达到极高水平 (~99 分)"),
+        ("C1b vs C1a", "Sparse/RRF 排名融合", "rrf",
+         "在相同 Dense 通道准入下引入词频混合召回，增强词汇命中多样性（已剔除零相关文档排名偏置）"),
+        ("C2 vs C1b", "Style-Aware 结构定向过滤", "style_filter",
+         "结构定向装配对篇章起承转合的塑造效果与金句拼接对节奏离散度扰动的客观权衡"),
+        ("D vs C2", "Critic 自审反思闭环 (盲审)", "critic",
+         "FSM 自审精准清除潜在八股违规词，经第三方条件盲审裁决的端到端质量闭环"),
+    ]
 
-    scaff_color = "green" if gain_scaffolding >= 0 else "yellow"
-    contrib_table.add_row(
-        "A1 vs A0",
-        "Writer Scaffolding 提示工程基准",
-        f"[{scaff_color}]{fmt_gain(gain_scaffolding)}[/{scaff_color}]",
-        "隔离 WriterAgent 提示工程、任务感知预算与防套话 Scaffolding 的独立贡献"
-    )
-    prof_color = "green" if gain_profile >= 0 else "yellow"
-    contrib_table.add_row(
-        "B vs A1",
-        "Style Profile 纯先验 (严格单变量)",
-        f"[{prof_color}]{fmt_gain(gain_profile)}[/{prof_color}]",
-        "在保持 WriterAgent Scaffolding 完全一致的条件下，纯 Style Profile 先验的真正独立贡献"
-    )
-    contrib_table.add_row(
-        "C1a vs B",
-        "Dense RAG 纯语义检索",
-        f"[green]{fmt_gain(gain_dense)}[/green]",
-        "引入连续语料段落；上下文平稳连续，句长节奏吻合度 (Rhythm) 达到极高水平 (~99 分)"
-    )
-    c1b_color = "green" if gain_rrf >= 0 else "yellow"
-    contrib_table.add_row(
-        "C1b vs C1a",
-        "Sparse/RRF 排名融合",
-        f"[{c1b_color}]{fmt_gain(gain_rrf)}[/{c1b_color}]",
-        "在无结构过滤下引入词频混合召回，增强词汇命中多样性（已剔除零相关文档排名偏置）"
-    )
-    c2_color = "green" if gain_style_filter >= 0 else "red"
-    c2_desc = (
-        f"Discourse篇章拟合提振({summary['C2']['discourse'].mean:.1f} vs {summary['C1b']['discourse'].mean:.1f})，但金句与长论据异构拼接打乱句长呼吸感(Rhythm {summary['C2']['rhythm'].mean - summary['C1b']['rhythm'].mean:+.1f}分)"
-        if gain_style_filter < 0
-        else f"结构化定向装配显著提升篇章起承转合，EchoScore 净增 +{gain_style_filter:.1f} 分"
-    )
-    contrib_table.add_row(
-        "C2 vs C1b",
-        "Style-Aware 结构定向过滤",
-        f"[{c2_color}]{fmt_gain(gain_style_filter)}[/{c2_color}]",
-        c2_desc
-    )
-    d_color = "green" if gain_critic >= 0 else "yellow"
-    d_desc = (
-        f"FSM 自审精准清除八股套话，经独立盲审评分提振 +{gain_critic:.1f} 分"
-        if gain_critic > 0
-        else f"消除潜在八股违规词，但重写略微偏向保守防御，独立盲审综合得分变动 {gain_critic:+.1f} 分"
-    )
-    contrib_table.add_row(
-        "D vs C2",
-        "Critic 自审反思闭环 (盲审)",
-        f"[{d_color}]{fmt_gain(gain_critic)}[/{d_color}]",
-        d_desc
-    )
+    for pair_name, var_name, key, desc in comp_meta:
+        stat = delta_summary[key]
+        color = "green" if stat.mean >= 0 else ("yellow" if key != "style_filter" else "red")
+        delta_str = f"[{color}]{stat.mean:+.1f} 分[/{color}]"
+        ci_str = f"[{stat.mean - stat.ci95:+.1f}, {stat.mean + stat.ci95:+.1f}]"
+        contrib_table.add_row(
+            pair_name, var_name, delta_str, ci_str, f"±{stat.std:.2f}", desc
+        )
 
     console.print(contrib_table)
 
     # 6. 导出报告至 reports/ 目录
-    # P0-2 修复：在真实在线结果产生前，绝不生成或覆盖正式的 ablation_study_report.md
     default_filename = "ablation_study_simulation.md" if is_simulation else "ablation_study_report.md"
     target_report_file = Path(output_path) if output_path else Path(f"./reports/{default_filename}")
     target_report_file.parent.mkdir(parents=True, exist_ok=True)
@@ -752,18 +785,25 @@ def run_ablation_study(
         else "> **实验模式**：真实在线 LLM 实测 (REAL ONLINE LLM EXECUTION)"
     )
 
-    empirical_analysis_section = _generate_empirical_analysis(summary, is_simulation=is_simulation)
+    empirical_analysis_section = _generate_empirical_analysis(
+        summary,
+        delta_summary=delta_summary,
+        is_simulation=is_simulation,
+        valid_pairs=valid_pairs,
+        attempted_pairs=attempted_pairs,
+    )
 
     report_md = f"""# EchoStyle 3.2 严格单变量消融实验报告 (Strict Single-Variable Matrix Report)
 
 - **评测时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
 - **评测规模**：{num_topics} 个领域正交主题 × {repeats} 次采样 = 共 {total_runs} 组样本/条件
+- **配对区块有效性 (Pair Validity)**：{valid_pairs} / {attempted_pairs} 有效配对区块 ({valid_pairs / max(1, attempted_pairs) * 100:.1f}%)，任何单条件失败均标记整组 7 条件配对区块失效 (Fail-Closed Paired Block)
 {mode_banner}
 
 ## 一、 消融实验统计矩阵 (Hierarchical Topic Clustered: Mean ± Std & 95% Student-t CI)
 
 | 消融实验条件 | Scaffolding | Profile | Dense 检索 | Hybrid RRF | 结构过滤 | Critic 重写 | 独立盲审 | 篇章拟合 (Discourse) | 节奏吻合 (Rhythm) | 用词质感 (Lexical) | 八股惩罚 | 跨主题 EchoScore (Mean ± Std) | 95% 置信区间 (Student-t) | 组内采样波动 (Within σ) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **A0 (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['A0']['discourse'].mean:.1f} | {summary['A0']['rhythm'].mean:.1f} | {summary['A0']['lexical'].mean:.1f} | -{summary['A0']['penalty'].mean:.1f} | **{summary['A0']['echo'].mean:.1f} ± {summary['A0']['echo'].std:.1f}** | [{max(0.0, summary['A0']['echo'].mean - summary['A0']['echo'].ci95):.1f}, {summary['A0']['echo'].mean + summary['A0']['echo'].ci95:.1f}] | ±{summary['A0']['echo'].within_std:.2f} |
 | **A1 (Scaffolding Base)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['A1']['discourse'].mean:.1f} | {summary['A1']['rhythm'].mean:.1f} | {summary['A1']['lexical'].mean:.1f} | -{summary['A1']['penalty'].mean:.1f} | **{summary['A1']['echo'].mean:.1f} ± {summary['A1']['echo'].std:.1f}** | [{max(0.0, summary['A1']['echo'].mean - summary['A1']['echo'].ci95):.1f}, {summary['A1']['echo'].mean + summary['A1']['echo'].ci95:.1f}] | ±{summary['A1']['echo'].within_std:.2f} |
 | **B (+Profile Only)** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | {summary['B']['discourse'].mean:.1f} | {summary['B']['rhythm'].mean:.1f} | {summary['B']['lexical'].mean:.1f} | -{summary['B']['penalty'].mean:.1f} | **{summary['B']['echo'].mean:.1f} ± {summary['B']['echo'].std:.1f}** | [{max(0.0, summary['B']['echo'].mean - summary['B']['echo'].ci95):.1f}, {summary['B']['echo'].mean + summary['B']['echo'].ci95:.1f}] | ±{summary['B']['echo'].within_std:.2f} |
@@ -771,6 +811,17 @@ def run_ablation_study(
 | **C1b (+Hybrid RRF RAG)** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | {summary['C1b']['discourse'].mean:.1f} | {summary['C1b']['rhythm'].mean:.1f} | {summary['C1b']['lexical'].mean:.1f} | -{summary['C1b']['penalty'].mean:.1f} | **{summary['C1b']['echo'].mean:.1f} ± {summary['C1b']['echo'].std:.1f}** | [{max(0.0, summary['C1b']['echo'].mean - summary['C1b']['echo'].ci95):.1f}, {summary['C1b']['echo'].mean + summary['C1b']['echo'].ci95:.1f}] | ±{summary['C1b']['echo'].within_std:.2f} |
 | **C2 (+Style-Aware RAG)** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | {summary['C2']['discourse'].mean:.1f} | {summary['C2']['rhythm'].mean:.1f} | {summary['C2']['lexical'].mean:.1f} | -{summary['C2']['penalty'].mean:.1f} | **{summary['C2']['echo'].mean:.1f} ± {summary['C2']['echo'].std:.1f}** | [{max(0.0, summary['C2']['echo'].mean - summary['C2']['echo'].ci95):.1f}, {summary['C2']['echo'].mean + summary['C2']['echo'].ci95:.1f}] | ±{summary['C2']['echo'].within_std:.2f} |
 | **D (Full EchoStyle)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | {summary['D']['discourse'].mean:.1f} | {summary['D']['rhythm'].mean:.1f} | {summary['D']['lexical'].mean:.1f} | -{summary['D']['penalty'].mean:.1f} | **{summary['D']['echo'].mean:.1f} ± {summary['D']['echo'].std:.1f}** | [{max(0.0, summary['D']['echo'].mean - summary['D']['echo'].ci95):.1f}, {summary['D']['echo'].mean + summary['D']['echo'].ci95:.1f}] | ±{summary['D']['echo'].within_std:.2f} |
+
+## 二、 核心组件配对单变量效应与置信区间 (Paired Component Deltas & 95% Student-t CI)
+
+| 对比组 | 验证自变量 | 配对均值差值 (Mean Δ) | 95% 置信区间 (Student-t) | 跨主题标准差 (Between σ) | 组内采样波动 (Within σ) | 统计推断与机制权衡 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **A1 vs A0** | Writer Scaffolding 提示工程基准 | **{delta_summary['scaffolding'].mean:+.1f}** | [{delta_summary['scaffolding'].mean - delta_summary['scaffolding'].ci95:+.1f}, {delta_summary['scaffolding'].mean + delta_summary['scaffolding'].ci95:+.1f}] | ±{delta_summary['scaffolding'].std:.2f} | ±{delta_summary['scaffolding'].within_std:.2f} | 提示工程与任务感知预算工程基准 |
+| **B vs A1** | Style Profile 纯先验 (严格单变量) | **{delta_summary['profile'].mean:+.1f}** | [{delta_summary['profile'].mean - delta_summary['profile'].ci95:+.1f}, {delta_summary['profile'].mean + delta_summary['profile'].ci95:+.1f}] | ±{delta_summary['profile'].std:.2f} | ±{delta_summary['profile'].within_std:.2f} | 严格控制 Scaffolding 变量后的 Style Profile 纯先验配对净贡献 |
+| **C1a vs B** | Dense RAG 纯语义检索 | **{delta_summary['dense'].mean:+.1f}** | [{delta_summary['dense'].mean - delta_summary['dense'].ci95:+.1f}, {delta_summary['dense'].mean + delta_summary['dense'].ci95:+.1f}] | ±{delta_summary['dense'].std:.2f} | ±{delta_summary['dense'].within_std:.2f} | 连续语料段落召回，节奏平滑性提升 |
+| **C1b vs C1a**| Sparse/RRF 排名融合 | **{delta_summary['rrf'].mean:+.1f}** | [{delta_summary['rrf'].mean - delta_summary['rrf'].ci95:+.1f}, {delta_summary['rrf'].mean + delta_summary['rrf'].ci95:+.1f}] | ±{delta_summary['rrf'].std:.2f} | ±{delta_summary['rrf'].within_std:.2f} | 共享 Dense 通道准入下的纯 RRF 词频混合边际效应 |
+| **C2 vs C1b** | Style-Aware 结构定向过滤 | **{delta_summary['style_filter'].mean:+.1f}** | [{delta_summary['style_filter'].mean - delta_summary['style_filter'].ci95:+.1f}, {delta_summary['style_filter'].mean + delta_summary['style_filter'].ci95:+.1f}] | ±{delta_summary['style_filter'].std:.2f} | ±{delta_summary['style_filter'].within_std:.2f} | 控制 RRF 变量后的结构定向过滤净贡献（篇章拟合 vs 句长离散度权衡） |
+| **D vs C2** | Critic 自审反思闭环 (盲审) | **{delta_summary['critic'].mean:+.1f}** | [{delta_summary['critic'].mean - delta_summary['critic'].ci95:+.1f}, {delta_summary['critic'].mean + delta_summary['critic'].ci95:+.1f}] | ±{delta_summary['critic'].std:.2f} | ±{delta_summary['critic'].within_std:.2f} | FSM 自审拦截八股违规，经独立条件盲审裁决 |
 
 {empirical_analysis_section}
 """

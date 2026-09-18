@@ -5,17 +5,20 @@ description = "AI 个人写作风格克隆与仿写系统"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "markitdown>=0.0.1a4",
+    "markitdown[docx,pdf]>=0.1.7",
+    "pymupdf>=1.28.2",
     "trafilatura>=2.0.0",
     "pydantic>=2.7.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0.1",
     "streamlit>=1.35.0",
     "rich>=13.7.0",
-    "python-dotenv>=1.0.1",
-    "pytest>=8.0.0",
     "tiktoken>=0.7.0",
+    "filelock>=3.16.0",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -29,4 +32,3 @@ pythonpath = ["."]
 markers = [
     "integration: marks test as real integration / smoke test",
 ]
-

@@ -1,4 +1,5 @@
 import json
+import math
 import random
 import re
 from typing import Dict, List, Any, Tuple, Optional
@@ -6,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from src.core.config import LLMConfig
 from src.core.models import DeepStyleProfile, EvaluationReport
+from src.core.exceptions import EvaluationUnavailableError
 from src.core.model_provider import ModelProvider
 from .lexical_metrics import LexicalEvaluator
 from .rhythm_metrics import RhythmEvaluator
@@ -82,38 +84,51 @@ class LLMJudge:
         lex_score, _ = LexicalEvaluator.evaluate_lexical_authenticity(article, target_sttr)
         stylometric_similarity = round(rhythm_score * 0.70 + lex_score * 0.30, 1)
 
-        # 3. LLM-as-a-Judge 专家仲裁
-        fidelity = 80.0
-        logic_depth = 85.0
-        human_pref = 80.0
-        feedback = "文风与论点基本符合预期。"
-        radar = {
-            "语气视角": 80.0,
-            "句式节奏": stylometric_similarity,
-            "用词口癖": 80.0,
-            "篇章逻辑": 85.0,
-            "去AI味": anti_ai_score,
-        }
-
+        # 3. LLM-as-a-Judge 专家仲裁。生产写作严格拒绝默认分降级。
         try:
+            def valid_score(name: str, value: Any) -> float:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(f"裁判输出评分非数值: {name}={value!r}")
+                score = float(value)
+                if not math.isfinite(score) or not 0.0 <= score <= 100.0:
+                    raise ValueError(f"裁判输出评分超出有效范围 [0-100]: {name}={score}")
+                return score
+
             raw_judge = self._call_judge(article, profile)
             parsed = self._extract_json(raw_judge)
-            fidelity = float(parsed.get("style_fidelity", fidelity))
-            logic_depth = float(parsed.get("logic_depth", logic_depth))
-            human_pref = float(parsed.get("human_preference", human_pref))
+            if not isinstance(parsed, dict):
+                raise ValueError("裁判返回内容不是 JSON 对象")
+            required_scores = ["style_fidelity", "logic_depth", "human_preference"]
+            missing = [key for key in required_scores if key not in parsed]
+            if missing:
+                raise ValueError(f"裁判输出缺少关键评分字段: {missing}")
 
-            if "radar" in parsed and isinstance(parsed["radar"], dict):
+            fidelity = valid_score("style_fidelity", parsed["style_fidelity"])
+            logic_depth = valid_score("logic_depth", parsed["logic_depth"])
+            human_pref = valid_score("human_preference", parsed["human_preference"])
+
+            radar = {
+                "语气视角": fidelity,
+                "句式节奏": stylometric_similarity,
+                "用词口癖": fidelity,
+                "篇章逻辑": logic_depth,
+                "去AI味": anti_ai_score,
+            }
+
+            if "radar" in parsed:
+                if not isinstance(parsed["radar"], dict):
+                    raise ValueError("裁判输出 radar 不是 JSON 对象")
                 r = parsed["radar"]
                 radar = {
-                    "语气视角": float(r.get("tone", fidelity)),
+                    "语气视角": valid_score("radar.tone", r["tone"]) if "tone" in r else fidelity,
                     "句式节奏": stylometric_similarity,
-                    "用词口癖": float(r.get("lexicon", fidelity)),
-                    "篇章逻辑": float(r.get("discourse", logic_depth)),
+                    "用词口癖": valid_score("radar.lexicon", r["lexicon"]) if "lexicon" in r else fidelity,
+                    "篇章逻辑": valid_score("radar.discourse", r["discourse"]) if "discourse" in r else logic_depth,
                     "去AI味": anti_ai_score,
                 }
-            feedback = parsed.get("critique_feedback", feedback)
+            feedback = str(parsed.get("critique_feedback", ""))
         except Exception as e:
-            feedback = f"规则引擎质检完成，LLM 裁判评分降级: {e}"
+            raise EvaluationUnavailableError(f"LLM 裁判调用或解析失败: {e}") from e
 
         # 4. 执行工业级标准化加权评分公式
         weighted_base = (
@@ -420,4 +435,3 @@ class IndependentEvaluator:
 
     def _extract_json(self, text: str) -> dict:
         return _extract_json_payload(text)
-

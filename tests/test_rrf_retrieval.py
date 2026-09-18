@@ -336,8 +336,161 @@ def test_hybrid_search_and_add_chunks_without_explicit_id():
         assert "深度学习" in results[0]["content"]
 
 
+def test_dense_search_and_hybrid_search_share_identical_dense_channel():
+    """验证 P0 缺陷修复：dense_search 与 hybrid_search 共享统一的 _dense_rank_candidates 准入机制与破平规则"""
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "shared_dense_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        # 构造候选切片：doc_pos 相似度为正，doc_zero 相似度为 0，doc_neg 相似度为负
+        store.chunks = [
+            {"id": "doc_pos", "content": "正向语义相关切片", "embedding": [1.0, 0.0, 0.0]},
+            {"id": "doc_zero", "content": "正交零相似切片", "embedding": [0.0, 1.0, 0.0]},
+            {"id": "doc_neg", "content": "完全负相关切片", "embedding": [-1.0, 0.0, 0.0]},
+        ]
+
+        # Query 向量与 doc_pos 完全重合
+        with patch.object(store.model_provider, "get_embeddings", return_value=[[1.0, 0.0, 0.0]]):
+            # 1. dense_search 只接纳 score > 0 的切片，doc_zero 和 doc_neg 均被严格过滤
+            dense_res = store.dense_search("测试查询", top_k=3)
+            assert len(dense_res) == 1
+            assert dense_res[0]["id"] == "doc_pos"
+            assert dense_res[0]["dense_score"] == 1.0
+
+            # 2. _dense_rank_candidates 返回相同的准入候选集合
+            rank_window = max(3 * 3, 20)
+            ranked = store._dense_rank_candidates(store.chunks, [1.0, 0.0, 0.0], rank_window=rank_window, require_dense=True)
+            assert len(ranked) == 1
+            assert ranked[0][1] == "doc_pos"
+
+            # 3. hybrid_search 的 Dense 通道同样只接纳 doc_pos
+            hybrid_res = store.hybrid_search("测试查询", top_k=3, require_dense=True)
+            assert any(r["id"] == "doc_pos" for r in hybrid_res)
+            assert not any(r["id"] == "doc_zero" for r in hybrid_res)
+            assert not any(r["id"] == "doc_neg" for r in hybrid_res)
 
 
+def test_stable_chunk_id_across_rebuilds_eliminates_random_tie_bias():
+    """验证 P1 缺陷修复：MemoryManager 与 VectorStore 采用确定性哈希 ID，同一批文章多次建库 ID 完全相同，杜绝破平随机偏差"""
+    from src.memory.memory_manager import MemoryManager
+
+    article_title = "思考的深度"
+    article_content = """说白了，很多人在互联网上搞的内容输出，本质上不过是高级的信息搬运工。
+
+别闹了。真正的思考从来不是拼图游戏，而是带着偏见的价值判断。
+
+写作这门手艺，最忌讳的就是四平八稳。保持尖锐，这是我们唯一能守住的阵地！"""
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        s1 = VectorStore(storage_path=str(Path(tmp_dir) / "store1.json"))
+        s2 = VectorStore(storage_path=str(Path(tmp_dir) / "store2.json"))
+        mgr1 = MemoryManager(vector_store=s1)
+        mgr2 = MemoryManager(vector_store=s2)
+
+        mgr1.ingest_article(article_title, article_content)
+        mgr2.ingest_article(article_title, article_content)
+
+        assert len(s1.chunks) == len(s2.chunks)
+        ids1 = [c["id"] for c in s1.chunks]
+        ids2 = [c["id"] for c in s2.chunks]
+
+        # 核心断言：两次跨重建生成的切片 ID 100% 确定性完全一致
+        assert ids1 == ids2
+        assert all(isinstance(cid, str) and len(cid) == 16 for cid in ids1)
 
 
+def test_sparse_stopword_filtering_prevents_pseudo_relevance():
+    """验证 P1 缺陷修复：高频停用字/词（是、在、工、作、的、人）被有效过滤，防止无关文档仅因虚词重叠产生伪正相关"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "stopword_store.json"
+        store = VectorStore(storage_path=str(store_file))
 
+        # 文档虽然包含“在、是、工、作、的、人”等常见汉字，但与查询的核心实词毫无语义关联
+        chunks = [
+            {"id": "doc_stopwords_only", "content": "人在不同的工作岗位上是需要付出努力的。", "source": "A"},
+            {"id": "doc_semantic_match", "content": "分布式系统架构设计与高并发微服务实战演进。", "source": "B"},
+        ]
+        store.add_chunks(chunks)
+
+        # 针对包含停用字但核心概念为“架构设计”的查询
+        results = store.hybrid_search("在工作中关于架构设计的探讨", top_k=2, require_dense=False)
+        result_ids = [r["id"] for r in results]
+
+        # 核心断言：doc_semantic_match 因命中“架构设计”被正确召回，而 doc_stopwords_only 绝不因包含虚词而获得虚假高分或混入
+        assert "doc_semantic_match" in result_ids
+        assert "doc_stopwords_only" not in result_ids
+
+
+def test_bm25_corpus_idf_suppresses_pseudo_relevance():
+    """验证 P1 缺陷修复：BM25L 与 IDF 算法有效压制非停用词的泛用单字撞车（如'化'、'际'），防止无关文风文档混入检索"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "bm25_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        # 构造两篇切片：一篇为餐饮相关，另一篇为包含'口语化'、'实际上'等单字'化'、'际'但与餐饮毫无关系的文风文章
+        chunks = [
+            {"id": "doc_catering", "content": "现代都市连锁餐饮与外卖快节奏生活变迁，外卖标准化重塑大众餐饮习惯。"},
+            {"id": "doc_writing_style", "content": "我们的中文互联网充斥着一种极其恶劣的文风。实际上，工具越是强大，人类越要警惕被机器同化。保持口语化。"},
+        ]
+        store.add_chunks(chunks)
+
+        # 查询包含多词搭配与二元词组
+        results = store.hybrid_search("现代都市便利化餐饮：快节奏生活下的餐饮形态与人际社交变迁", top_k=2, require_dense=False)
+        result_ids = [r["id"] for r in results]
+
+        # 核心断言：doc_catering 凭借高 IDF 的'餐饮'、'现代都市'、'快节奏'等二元词命中并排在首位
+        # doc_writing_style 绝不能因为仅靠单字'化'、'际'弱匹配而进入 Sparse ranking
+        assert "doc_catering" in result_ids
+        assert "doc_writing_style" not in result_ids
+
+
+def test_add_chunks_with_none_id_generates_stable_id():
+    """验证 P1 缺陷修复：当切片显式传入 id 为 None 时，正确自动分配确定性稳定哈希 ID，杜绝 id 塌缩为 'None' 导致切片覆盖或破平失效"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "none_id_store.json"
+        store = VectorStore(storage_path=str(store_file))
+
+        # 传入两个 id 为 None 的切片
+        chunks = [
+            {"id": None, "content": "第一篇测试切片，内容关于系统高并发架构设计。"},
+            {"id": None, "content": "第二篇测试切片，内容关于系统分布式存储演进。"},
+        ]
+        store.add_chunks(chunks)
+
+        # 核心断言 1：每个切片均获得有效非空的确定性稳定哈希 ID，绝不为 None 或 'None'
+        assert len(store.chunks) == 2
+        id1 = store.chunks[0]["id"]
+        id2 = store.chunks[1]["id"]
+        assert id1 is not None and id1 != "None" and len(id1) == 16
+        assert id2 is not None and id2 != "None" and len(id2) == 16
+        assert id1 != id2
+
+        # 核心断言 2：hybrid_search 能分别索引并返回它们，字典键绝不会相互覆盖
+        results = store.hybrid_search("系统", top_k=2, require_dense=False)
+        assert len(results) == 2
+        returned_ids = [r["id"] for r in results]
+        assert id1 in returned_ids
+        assert id2 in returned_ids
+
+
+def test_dense_search_require_dense_parameter():
+    """验证 dense_search 与 hybrid_search 对称支持 require_dense 参数"""
+    from unittest.mock import patch
+    import pytest
+    from src.core.exceptions import EmbeddingUnavailableError
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store_file = Path(tmp_dir) / "dense_param_store.json"
+        store = VectorStore(storage_path=str(store_file))
+        store.chunks = [{"id": "d1", "content": "内容", "embedding": None}]
+
+        with patch.object(store.model_provider, "get_embeddings", return_value=None):
+            # require_dense=True 时 Fail-Closed
+            with pytest.raises(EmbeddingUnavailableError):
+                store.dense_search("查询", top_k=1, require_dense=True)
+
+            # require_dense=False 时返回空列表，不抛出异常
+            res = store.dense_search("查询", top_k=1, require_dense=False)
+            assert res == []

@@ -110,6 +110,9 @@ def main():
             sys.exit(1)
 
         deep_profile = DeepStyleProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
+        if not deep_profile.profile_id:
+            console.print("[bold red]旧版文风档案没有 profile_id，请重新运行 distill 建模后再写作。[/bold red]")
+            sys.exit(1)
         console.print(f"[bold cyan]Coordinator 启动创作任务: [{args.topic}] (文风: {deep_profile.name})...[/bold cyan]")
 
         final_article, report, final_state = coordinator.generate_article(

@@ -120,6 +120,7 @@ def test_coordinator_initial_draft_fsm_and_rollback_recovery():
 
     profile = DeepStyleProfile(
         name="测试文风",
+        profile_id="fsm-profile-1",
         qualitative=StyleProfile(
             name="测试",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="冷静"),
@@ -171,6 +172,7 @@ def test_coordinator_best_version_tracks_true_historical_maximum():
 
     profile = DeepStyleProfile(
         name="测试文风",
+        profile_id="fsm-profile-2",
         qualitative=StyleProfile(
             name="测试",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="冷静"),
@@ -216,6 +218,7 @@ def test_coordinator_retries_exhausted_recovers_highest_historical_score():
 
     profile = DeepStyleProfile(
         name="测试文风",
+        profile_id="fsm-profile-3",
         qualitative=StyleProfile(
             name="测试",
             tone_persona=TonePersona(perspective="第一人称", emotional_tone="冷静"),
@@ -246,7 +249,6 @@ def test_coordinator_retries_exhausted_recovers_highest_historical_score():
     assert draft == "高质量v1草稿(78分)"
     assert rep.overall_score == 78.0
     assert final_st.current_status == AgentStatus.COMPLETED_WITH_WARNING
-
 
 
 

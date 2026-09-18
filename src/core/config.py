@@ -20,7 +20,8 @@ class EmbeddingConfig(BaseModel):
 
 class ExtractorConfig(BaseModel):
     pdf_engine: str = Field(default="auto", description="auto (智能探测自适应), markitdown, 或 mineru")
-    mineru_command: str = Field(default="magic-pdf")
+    mineru_command: str = Field(default="mineru-kit")
+    mineru_tier: str = Field(default="basic", description="MinerU 本地模型档位: basic 或 standard")
     clean_noise: bool = Field(default=True)
     repair_linebreaks: bool = Field(default=True)
 
@@ -110,4 +111,3 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         data["embedding"]["model"] = os.getenv("EMBEDDING_MODEL")
 
     return AppConfig(**data)
-

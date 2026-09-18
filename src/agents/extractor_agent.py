@@ -15,9 +15,10 @@ class ExtractorAgent(BaseAgent):
     具备自动感知文档排版复杂度的能力，自适应分派最佳解析引擎，并驱动状态机。
     """
 
-    def __init__(self, mineru_cmd: str = "magic-pdf"):
+    def __init__(self, mineru_cmd: str = "mineru-kit", mineru_tier: str = "basic"):
         super().__init__(name="ExtractorAgent", description="负责文档排版探测、引擎自适应分派与去噪抽取")
         self.mineru_cmd = mineru_cmd
+        self.mineru_tier = mineru_tier
         self.wechat_extractor = WeChatExtractor()
         self.word_extractor = WordExtractor()
 
@@ -32,7 +33,7 @@ class ExtractorAgent(BaseAgent):
             return {
                 "title": f"微信文章_{source[-10:]}",
                 "content": clean_md,
-                "engine_used": "jina_reader",
+                "engine_used": self.wechat_extractor.last_engine_used,
                 "char_count": len(clean_md),
             }
 
@@ -60,12 +61,16 @@ class ExtractorAgent(BaseAgent):
             chosen_engine = inspection["recommended_engine"] if force_engine == "auto" else force_engine
             state.transition_to(AgentStatus.PARSING, f"PDF 排版探测: {inspection['reason']} => 决策选用引擎 [{chosen_engine}]")
 
-            pdf_extractor = PDFExtractor(engine=chosen_engine, mineru_cmd=self.mineru_cmd)
+            pdf_extractor = PDFExtractor(
+                engine=chosen_engine,
+                mineru_cmd=self.mineru_cmd,
+                mineru_tier=self.mineru_tier,
+            )
             clean_md = pdf_extractor.extract(str(p))
             return {
                 "title": p.stem,
                 "content": clean_md,
-                "engine_used": f"pdf_{chosen_engine}",
+                "engine_used": f"pdf_{pdf_extractor.last_engine_used}",
                 "char_count": len(clean_md),
             }
 

@@ -68,6 +68,20 @@ def test_hierarchical_statistics_calculation():
     assert abs(stat.ci95 - 3.93) <= 0.05
 
 
+def test_hierarchical_statistics_empty_leading_topic():
+    """验证 P0 缺陷修复：当首个主题或部分前置主题因整块失败为空时，分层统计正确提取有效主题计算均值与置信区间，绝不因索引硬取 topic_runs[0] 塌缩为 0"""
+    from experiments.ablation_study import _calc_hierarchical_stats
+
+    # 模拟 Topic 1 全部失败为空列表，只有 Topic 2 成功有采样数据
+    runs = [[], [10.0, 12.0, 14.0]]
+    stat = _calc_hierarchical_stats(runs)
+
+    assert stat.mean == 12.0
+    assert stat.std == 2.0
+    assert stat.ci95 > 0.0
+    assert stat.within_std == 2.0
+
+
 def test_independent_evaluator_condition_blind_holdout_evaluation():
     """验证：IndependentEvaluator 作为 Condition-Blind Holdout Evaluator，使用 temperature=0.0 降低采样随机性进行条件盲化留出裁决"""
     from unittest.mock import MagicMock
@@ -382,7 +396,74 @@ def test_load_config_parses_embedding_environment_variables(monkeypatch):
         assert conf.embedding.model == "custom-emb-text-v1"
 
 
+def test_paired_delta_statistics_and_report_valid_pairs():
+    """验证 P0 缺陷修复：消融实验采用配对单变量差值 Δ 及其 95% CI 统计，并输出配对区块有效性指标"""
+    import tempfile
+    from pathlib import Path
+    from experiments.ablation_study import run_ablation_study
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        report_file = Path(tmp_dir) / "paired_report.md"
+        run_ablation_study(topics_count=2, repeats=2, simulate=True, output_path=str(report_file))
+
+        assert report_file.exists()
+        content = report_file.read_text(encoding="utf-8")
+
+        # 核心断言 1：输出配对区块有效性指标
+        assert "配对区块有效性 (Pair Validity)" in content
+        assert "有效配对区块" in content
+        assert "Fail-Closed Paired Block" in content
+
+        # 核心断言 2：包含核心组件配对单变量效应与置信区间矩阵
+        assert "核心组件配对单变量效应与置信区间" in content
+        assert "配对均值差值 (Mean Δ)" in content
+        assert "95% 置信区间 (Student-t)" in content
+
+        # 核心断言 3：各组件对比组与配对差值完整展示
+        for pair in ["A1 vs A0", "B vs A1", "C1a vs B", "C1b vs C1a", "C2 vs C1b", "D vs C2"]:
+            assert pair in content
 
 
+def test_paired_block_fail_closed_on_any_condition_failure():
+    """验证 P0 缺陷修复：任何单一条件评测失败时，坚决将整组 7 条件配对区块标记为 Invalid，杜绝样本不均衡偏置"""
+    import pytest
+    from unittest.mock import MagicMock, patch
+    from src.core.config import AppConfig
+    from src.core.exceptions import EvaluationUnavailableError
+    from experiments.ablation_study import run_ablation_study
 
+    dummy_config = AppConfig()
+    dummy_config.llm.api_key = "sk-valid-key-for-test"
+    dummy_config.embedding.api_key = "sk-valid-emb-key"
 
+    # 模拟在 1 topic x 1 repeat 场景下，C1b 条件在评测时失败返回 None
+    call_counts = {"count": 0}
+
+    def mock_eval_run(*args, **kwargs):
+        call_counts["count"] += 1
+        # 前 4 个条件 (A0, A1, B, C1a) 正常，第 5 个条件 (C1b) 失败返回 None
+        if call_counts["count"] == 5:
+            return None
+        mock_res = MagicMock()
+        mock_res.echo_score = 88.0
+        mock_res.discourse_fit = 85.0
+        mock_res.rhythm_match = 90.0
+        mock_res.lexical_authenticity = 92.0
+        mock_res.cliche_penalty = 0.0
+        return mock_res
+
+    with patch("experiments.ablation_study.load_config", return_value=dummy_config), \
+         patch("src.core.model_provider.ModelProvider.get_embeddings", return_value=[[0.1, 0.2], [0.1, 0.2]]), \
+         patch("src.core.model_provider.ModelProvider.chat", return_value="生成的文章"), \
+         patch("src.agents.coordinator.CoordinatorAgent.build_style", return_value=MagicMock()), \
+         patch("src.agents.writer_agent.WriterAgent.generate", return_value="生成的文章"), \
+         patch("src.agents.coordinator.CoordinatorAgent.run", return_value=("成文", MagicMock(), MagicMock())), \
+         patch("src.memory.memory_manager.MemoryManager.retrieve_dense", return_value=["切片"]), \
+         patch("src.memory.memory_manager.MemoryManager.retrieve_hybrid", return_value=["切片"]), \
+         patch("src.memory.memory_manager.MemoryManager.retrieve_dynamic_few_shots", return_value=["切片"]), \
+         patch("experiments.ablation_study._evaluate_condition_run", side_effect=mock_eval_run):
+
+        # 因为唯一的 1 组配对块中 C1b 失败，整组 7 条件配对块失效，valid_pairs 为 0，触发 Fail-Closed 抛出异常
+        with pytest.raises(EvaluationUnavailableError) as exc:
+            run_ablation_study(topics_count=1, repeats=1, simulate=False)
+        assert "有效配对统计报告" in str(exc.value)

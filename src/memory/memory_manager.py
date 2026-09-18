@@ -1,5 +1,5 @@
+import hashlib
 import re
-import uuid
 from typing import Any, Dict, List, Optional
 from src.core.config import EmbeddingConfig, LLMConfig
 from src.core.models import ChunkMetadata
@@ -21,8 +21,8 @@ class MemoryManager:
     ):
         self.vector_store = vector_store or VectorStore(embedding_config=embedding_config, llm_config=llm_config)
 
-    def ingest_article(self, title: str, content: str) -> int:
-        chunks = self._chunk_article(title, content)
+    def ingest_article(self, title: str, content: str, profile_id: Optional[str] = None) -> int:
+        chunks = self._chunk_article(title, content, profile_id=profile_id)
         return self.vector_store.add_chunks(chunks)
 
     def retrieve_style_aware(
@@ -31,6 +31,7 @@ class MemoryManager:
         target_type: Optional[str] = None,
         top_k: int = 3,
         require_dense: bool = False,
+        profile_id: Optional[str] = None,
     ) -> List[str]:
         """
         风格感知定向检索：
@@ -44,6 +45,7 @@ class MemoryManager:
             top_k=top_k,
             type_filter=target_type,
             require_dense=require_dense,
+            profile_id=profile_id,
         )
         return [r["content"] for r in results]
 
@@ -52,16 +54,20 @@ class MemoryManager:
         query: str,
         top_k: int = 3,
         target_type: Optional[str] = None,
+        require_dense: bool = True,
+        profile_id: Optional[str] = None,
     ) -> List[str]:
         """
         纯密集向量语义检索 (Standard Semantic RAG - Condition C1a):
         不使用词频匹配，不经过 RRF 倒数排名融合，用于消融对照组严格控制变量。
-        Fail-Closed：若向量不可用直接报错。
+        Fail-Closed：若 require_dense=True 且向量不可用直接报错。
         """
         results = self.vector_store.dense_search(
             query=query,
             top_k=top_k,
-            type_filter=target_type
+            type_filter=target_type,
+            require_dense=require_dense,
+            profile_id=profile_id,
         )
         return [r["content"] for r in results]
 
@@ -71,6 +77,7 @@ class MemoryManager:
         top_k: int = 3,
         target_type: Optional[str] = None,
         require_dense: bool = False,
+        profile_id: Optional[str] = None,
     ) -> List[str]:
         """
         混合 RRF 检索 (Hybrid RRF RAG - Condition C1b):
@@ -82,6 +89,7 @@ class MemoryManager:
             top_k=top_k,
             type_filter=target_type,
             require_dense=require_dense,
+            profile_id=profile_id,
         )
         return [r["content"] for r in results]
 
@@ -91,6 +99,7 @@ class MemoryManager:
         top_k: int = 3,
         type_filter: Optional[str] = None,
         require_dense: bool = False,
+        profile_id: Optional[str] = None,
     ) -> List[str]:
         """
         风格感知定向篇章结构组合召回 (Style-Aware Few-shot Retrieval)：
@@ -99,22 +108,22 @@ class MemoryManager:
         确保 WriterAgent 生成链路 (Condition D) 与消融实验 Condition C2 检索逻辑完全一致。
         """
         if type_filter or top_k < 3:
-            return self.retrieve_style_aware(query, target_type=type_filter, top_k=top_k, require_dense=require_dense)
+            return self.retrieve_style_aware(query, target_type=type_filter, top_k=top_k, require_dense=require_dense, profile_id=profile_id)
 
-        hooks = self.retrieve_style_aware(query, target_type="hook", top_k=1, require_dense=require_dense)
-        quotes = self.retrieve_style_aware(query, target_type="quote", top_k=1, require_dense=require_dense)
-        args_s = self.retrieve_style_aware(query, target_type="argument", top_k=1, require_dense=require_dense)
+        hooks = self.retrieve_style_aware(query, target_type="hook", top_k=1, require_dense=require_dense, profile_id=profile_id)
+        quotes = self.retrieve_style_aware(query, target_type="quote", top_k=1, require_dense=require_dense, profile_id=profile_id)
+        args_s = self.retrieve_style_aware(query, target_type="argument", top_k=1, require_dense=require_dense, profile_id=profile_id)
         combined = hooks + quotes + args_s
 
         if len(combined) < top_k:
-            fallback = self.vector_store.hybrid_search(query, top_k=top_k, require_dense=require_dense)
+            fallback = self.vector_store.hybrid_search(query, top_k=top_k, require_dense=require_dense, profile_id=profile_id)
             for f in fallback:
                 if f["content"] not in combined and len(combined) < top_k:
                     combined.append(f["content"])
         return combined[:top_k]
 
-    def get_memory_stats(self) -> Dict[str, Any]:
-        all_chunks = self.vector_store.get_all()
+    def get_memory_stats(self, profile_id: Optional[str] = None) -> Dict[str, Any]:
+        all_chunks = self.vector_store.get_all(profile_id=profile_id)
         types_count = {}
         for c in all_chunks:
             meta = c.get("metadata", {})
@@ -127,10 +136,10 @@ class MemoryManager:
             "sources": list(set(c.get("metadata", {}).get("source", "未知") for c in all_chunks)),
         }
 
-    def clear_memory(self):
-        self.vector_store.clear()
+    def clear_memory(self, profile_id: Optional[str] = None):
+        self.vector_store.clear(profile_id=profile_id)
 
-    def _chunk_article(self, title: str, content: str) -> List[Dict[str, Any]]:
+    def _chunk_article(self, title: str, content: str, profile_id: Optional[str] = None) -> List[Dict[str, Any]]:
         raw_paras = [p.strip() for p in content.split("\n\n") if len(p.strip()) >= 10]
         chunks = []
         total_paras = len(raw_paras)
@@ -166,10 +175,13 @@ class MemoryManager:
             elif "！" in p or "绝不" in p or "别闹了" in p or "懦弱" in p:
                 emotion = "犀利强烈"
 
-            chunk_id = str(uuid.uuid4())[:8]
+            # 确定性稳定 ID：基于来源、段落位置与内容生成哈希，杜绝 uuid.uuid4() 随机 ID 导致的破平不确定性
+            stable_seed = f"{profile_id}_{title}_{idx}_{p}"
+            chunk_id = hashlib.sha256(stable_seed.encode("utf-8")).hexdigest()[:16]
             meta = ChunkMetadata(
                 chunk_id=chunk_id,
                 source=title,
+                profile_id=profile_id,
                 position=position,
                 position_pct=pos_pct,
                 function=func,
