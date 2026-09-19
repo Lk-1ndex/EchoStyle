@@ -1,3 +1,9 @@
+from types import SimpleNamespace
+
+import pytest
+
+from experiments.blind_benchmark import _significance_statement
+from src.core.exceptions import EvaluationUnavailableError
 from src.evaluation.blind_eval import BlindEvaluator, PairwiseComparisonResult
 
 
@@ -31,6 +37,25 @@ def test_evaluate_pair_offline_fallback():
     assert res.candidate_score > res.baseline_score
 
 
+def test_evaluate_pair_strict_online_mode_does_not_hide_judge_failure():
+    class FailingProvider:
+        llm_config = SimpleNamespace(api_key="online-key")
+
+        @staticmethod
+        def chat(**kwargs):
+            raise RuntimeError("judge offline")
+
+    with pytest.raises(EvaluationUnavailableError, match="judge offline"):
+        BlindEvaluator.evaluate_pair(
+            "主题",
+            "候选文章",
+            "基准文章",
+            "作者参考",
+            provider=FailingProvider(),
+            strict=True,
+        )
+
+
 def test_aggregate_results():
     results = [
         PairwiseComparisonResult(task_id="1", topic="T1", winner="candidate", candidate_score=90, baseline_score=60, rationale=""),
@@ -47,6 +72,15 @@ def test_aggregate_results():
     # 胜率: (2 + 0.5 * 1) / 4 = 2.5 / 4 = 0.625
     assert summary.win_rate == 0.625
     assert 0.0 <= summary.ci_lower <= summary.win_rate <= summary.ci_upper <= 1.0
+
+
+def test_significance_statement_depends_on_confidence_interval():
+    significant = SimpleNamespace(total_trials=10, ci_lower=0.56, ci_upper=0.94)
+    inconclusive = SimpleNamespace(total_trials=10, ci_lower=0.31, ci_upper=0.77)
+
+    assert "显著优于" in _significance_statement(significant)
+    assert "不足以证明" in _significance_statement(inconclusive)
+    assert "显著优于" not in _significance_statement(inconclusive)
 
 
 def test_multi_persona_judge_offline_objective():

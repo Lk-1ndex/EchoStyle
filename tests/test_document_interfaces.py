@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -106,13 +107,21 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
     import streamlit as st
 
     monkeypatch.chdir(tmp_path)
-    uploaded = SimpleNamespace(name="sample.md", getvalue=lambda: b"Sample article body")
+    payload = b"Sample article body"
+
+    class StreamingUpload(BytesIO):
+        name = "sample.md"
+
+        def getvalue(self):
+            raise AssertionError("streaming uploads must not call getvalue()")
+
+    uploaded = StreamingUpload(payload)
     config = AppConfig()
     app_path = Path(__file__).resolve().parents[1] / "src/web/app.py"
 
     def extract(sources, state):
         assert len(sources) == 1
-        assert Path(sources[0]).read_bytes() == uploaded.getvalue()
+        assert Path(sources[0]).read_bytes() == payload
         if fails:
             raise RuntimeError("offline extraction failed")
         return [{"title": Path(sources[0]).stem, "content": "Sample article body", "engine_used": "plain_text", "char_count": 19}]

@@ -141,6 +141,35 @@ def test_write_passes_compacted_context_into_controlled_writer():
     assert "面向中文读者" in key_points
 
 
+def test_profile_write_passes_uploaded_documents_as_grounded_sources():
+    provider = MagicMock()
+    provider.chat_completion.return_value = route_payload(
+        "write",
+        topic="非厄米系统",
+        key_points="解释实验结论",
+        use_active_profile=True,
+        use_documents_as_sources=True,
+    )
+    coordinator = MagicMock()
+    coordinator.generate_article.return_value = (
+        "最终文章",
+        EvaluationReport(overall_score=88.0),
+        AgentState(),
+    )
+    agent = ConversationAgent(AppConfig(), coordinator, model_provider=provider)
+    documents = [{"title": "论文A", "content": "SOURCE_SENTINEL：边界条件决定谱结构。"}]
+
+    agent.respond(
+        "依据上传论文，按当前文风写一篇文章",
+        documents,
+        profile=make_profile(),
+    )
+
+    key_points = coordinator.generate_article.call_args.kwargs["key_points"]
+    assert "SOURCE_SENTINEL" in key_points
+    assert "不可信数据" in key_points
+
+
 def test_revision_passes_user_instruction_to_controlled_workflow():
     provider = MagicMock()
     provider.chat_completion.return_value = route_payload("revise", key_points="第二段更通俗")

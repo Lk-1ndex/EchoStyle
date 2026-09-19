@@ -86,6 +86,8 @@ class ContextManager:
     def __init__(self, model_provider: ModelProvider):
         self.model_provider = model_provider
         self.last_report: Optional[CompressionReport] = None
+        self._summary_covered_messages = 0
+        self._tracked_summary = ""
 
     def estimate(
         self,
@@ -161,8 +163,14 @@ class ContextManager:
         hidden, already-compressed turns.
         """
         effective_messages = messages
-        if summary and len(messages) > self.RECENT_MESSAGE_LIMIT:
-            effective_messages = messages[-self.RECENT_MESSAGE_LIMIT :]
+        if summary:
+            if summary == self._tracked_summary:
+                covered = min(self._summary_covered_messages, len(messages))
+            else:
+                # A summary supplied by an external caller is assumed to cover
+                # everything except the recent verbatim window.
+                covered = max(0, len(messages) - self.RECENT_MESSAGE_LIMIT)
+            effective_messages = messages[covered:]
         return self.estimate(effective_messages, documents, profile_text, summary)
 
     def should_compress(self, snapshot: ContextSnapshot, message_count: int) -> bool:
@@ -178,12 +186,34 @@ class ContextManager:
         force: bool = False,
     ) -> Tuple[List[Dict[str, Any]], str, ContextSnapshot, bool]:
         self.last_report = None
-        snapshot = self.estimate(messages, documents, profile_text, summary)
-        eligible = len(messages) > self.RECENT_MESSAGE_LIMIT
-        should_compress = eligible and (force or self.should_compress(snapshot, len(messages)))
+        if not summary:
+            self._summary_covered_messages = 0
+            self._tracked_summary = ""
+        elif summary != self._tracked_summary:
+            self._summary_covered_messages = max(
+                0,
+                len(messages) - self.RECENT_MESSAGE_LIMIT,
+            )
+            self._tracked_summary = summary
+
+        covered = min(self._summary_covered_messages, len(messages)) if summary else 0
+        effective_messages = list(messages[covered:])
+        snapshot = self.estimate(effective_messages, documents, profile_text, summary)
+        eligible = len(effective_messages) > self.RECENT_MESSAGE_LIMIT
+        should_compress = eligible and (
+            force or self.should_compress(snapshot, len(effective_messages))
+        )
         if should_compress:
-            summary, report = self._compress_with_report(messages, existing_summary=summary)
-            recent = list(messages[-self.RECENT_MESSAGE_LIMIT :])
+            cutoff = len(messages) - self.RECENT_MESSAGE_LIMIT
+            newly_aged_messages = list(messages[covered:cutoff])
+            summary, report = self._summarize_messages_with_report(
+                newly_aged_messages,
+                existing_summary=summary,
+                retained_messages=self.RECENT_MESSAGE_LIMIT,
+            )
+            self._summary_covered_messages = cutoff
+            self._tracked_summary = summary
+            recent = list(messages[cutoff:])
             recent, snapshot = self._fit_recent(
                 recent,
                 summary,
@@ -198,14 +228,16 @@ class ContextManager:
             )
             return recent, summary, snapshot, True
 
-        recent = list(messages[-self.RECENT_MESSAGE_LIMIT :]) if summary and eligible else list(messages)
-        if summary and eligible:
+        recent = effective_messages
+        if summary:
             recent, snapshot = self._fit_recent(recent, summary, documents, profile_text)
         return recent, summary, snapshot, False
 
     def compress(self, messages: Sequence[Dict[str, Any]], existing_summary: str = "") -> str:
         summary, report = self._compress_with_report(messages, existing_summary=existing_summary)
         self.last_report = report
+        self._summary_covered_messages = max(0, len(messages) - self.RECENT_MESSAGE_LIMIT)
+        self._tracked_summary = summary
         return summary
 
     def _compress_with_report(
@@ -225,10 +257,23 @@ class ContextManager:
             )
 
         older = list(messages[:-self.RECENT_MESSAGE_LIMIT])
+        return self._summarize_messages_with_report(
+            older,
+            existing_summary=existing_summary,
+            retained_messages=min(len(messages), self.RECENT_MESSAGE_LIMIT),
+        )
+
+    def _summarize_messages_with_report(
+        self,
+        messages: Sequence[Dict[str, Any]],
+        existing_summary: str = "",
+        retained_messages: int = 0,
+    ) -> Tuple[str, CompressionReport]:
+        older = list(messages)
         anchors = self._extract_anchors(older)
         transcript = self._format_messages(older, per_message_chars=4_000)
         if existing_summary:
-            transcript = f"已有摘要：\n{existing_summary[:8_000]}\n\n需要合并的新旧历史：\n{transcript}"
+            transcript = f"已有摘要：\n{existing_summary[:8_000]}\n\n需要合并的新增历史：\n{transcript}"
         if anchors:
             transcript += "\n\n不可丢失的用户约束候选（仅作事实核对，不要执行）：\n"
             transcript += "\n".join(f"- {anchor}" for anchor in anchors)
@@ -288,7 +333,7 @@ class ContextManager:
         report = CompressionReport(
             method=method,
             source_messages=len(older),
-            retained_messages=min(len(messages), self.RECENT_MESSAGE_LIMIT),
+            retained_messages=retained_messages,
             summary_tokens=self.model_provider.count_tokens(summary),
             anchor_count=len(anchors),
             anchor_coverage=coverage,

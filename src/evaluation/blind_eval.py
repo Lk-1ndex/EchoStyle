@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from src.core.model_provider import ModelProvider
 from src.core.config import LLMConfig
+from src.core.exceptions import EvaluationUnavailableError
 
 
 class PairwiseComparisonResult(BaseModel):
@@ -60,10 +61,12 @@ class BlindEvaluator:
         text_baseline: str,
         author_reference: str,
         provider: Optional[ModelProvider] = None,
+        strict: bool = False,
     ) -> PairwiseComparisonResult:
         """
         执行单次双盲裁决。
         如果未提供真实 LLM provider，采用规则与语言学统计进行客观盲测仲裁。
+        strict=True 时禁止在线裁判失败后静默降级为本地规则。
         """
         # 随机分配 A 和 B，避免固定顺序带来的位置偏好
         is_candidate_first = random.choice([True, False])
@@ -102,10 +105,22 @@ class BlindEvaluator:
                 )
                 import json
                 data = json.loads(raw_json)
+                if strict:
+                    required = {"score_a", "score_b", "winner"}
+                    missing = sorted(required - set(data)) if isinstance(data, dict) else sorted(required)
+                    if missing:
+                        raise ValueError(f"裁判输出缺少关键字段: {missing}")
                 score_a = float(data.get("score_a", 75.0))
                 score_b = float(data.get("score_b", 75.0))
                 raw_winner = data.get("winner", "TIE").upper()
                 rationale = data.get("rationale", "")
+
+                if strict:
+                    if raw_winner not in {"A", "B", "TIE"}:
+                        raise ValueError(f"裁判返回了无效 winner: {raw_winner!r}")
+                    for score_name, score in (("score_a", score_a), ("score_b", score_b)):
+                        if not math.isfinite(score) or not 0.0 <= score <= 100.0:
+                            raise ValueError(f"裁判返回了无效评分: {score_name}={score!r}")
 
                 if raw_winner == "A":
                     winner = "candidate" if is_candidate_first else "baseline"
@@ -125,8 +140,12 @@ class BlindEvaluator:
                     baseline_score=b_score,
                     rationale=rationale
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                if strict:
+                    raise EvaluationUnavailableError(f"在线盲评裁判调用或解析失败: {exc}") from exc
+
+        if strict:
+            raise EvaluationUnavailableError("严格在线盲评需要配置可用的裁判模型")
 
         # 离线客观规则仲裁 (Fallback)
         from src.evaluation.metrics import MetricEvaluator

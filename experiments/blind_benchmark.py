@@ -42,6 +42,27 @@ SAMPLE_ESSAY_REF = """# 别把信息搬运当成深度思考
 import argparse
 
 
+def _significance_statement(summary: Any) -> str:
+    lower = summary.ci_lower * 100
+    upper = summary.ci_upper * 100
+    if summary.total_trials == 0:
+        return "当前没有有效试验，无法判断相对 50% 随机基准线的统计显著性。"
+    if summary.ci_lower > 0.5:
+        return (
+            f"在 95% 置信水平下，胜率置信区间为 **[{lower:.1f}%, {upper:.1f}%]**，"
+            "下界高于 50%，结果显著优于随机基准线。"
+        )
+    if summary.ci_upper < 0.5:
+        return (
+            f"在 95% 置信水平下，胜率置信区间为 **[{lower:.1f}%, {upper:.1f}%]**，"
+            "上界低于 50%，结果显著低于随机基准线。"
+        )
+    return (
+        f"在 95% 置信水平下，胜率置信区间为 **[{lower:.1f}%, {upper:.1f}%]**，"
+        "区间包含 50%，当前样本不足以证明相对随机基准线存在显著优势。"
+    )
+
+
 def run_blind_benchmark(simulate: bool = False, output_path: str = None):
     console.print(Panel.fit(
         "[bold cyan]EchoStyle 3.1 — 规范化双盲评测套件 (Blind Pairwise Benchmark)[/bold cyan]\n"
@@ -111,7 +132,8 @@ def run_blind_benchmark(simulate: bool = False, output_path: str = None):
             text_candidate=cand_text,
             text_baseline=base_text,
             author_reference=SAMPLE_ESSAY_REF,
-            provider=provider
+            provider=provider,
+            strict=not is_simulation,
         )
         results.append(res)
         console.print(f"   [green]+[/green] 裁决胜者: [bold]{res.winner.upper()}[/bold] (候选分: {res.candidate_score} vs 基准分: {res.baseline_score})")
@@ -166,9 +188,10 @@ def run_blind_benchmark(simulate: bool = False, output_path: str = None):
     for i, t in enumerate(summary.trials, 1):
         report_md += f"| Task {i} | {t.topic} | **{t.winner.upper()}** | {t.candidate_score:.1f} | {t.baseline_score:.1f} | {t.rationale} |\n"
 
+    significance_statement = _significance_statement(summary)
     report_md += f"""
 ## 二、 统计显著性分析
-在 95% 置信水平下，EchoStyle 相对传统 Baseline 的胜率置信下界为 **{summary.ci_lower * 100:.1f}%**，显著高于 50% 随机基准线，证实了系统在去 AI 八股味与篇章呼吸感上的显著优势。
+{significance_statement}
 """
     target_report_file.write_text(report_md, encoding="utf-8")
     (Path("./profiles") / default_filename).write_text(report_md, encoding="utf-8")

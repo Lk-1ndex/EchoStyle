@@ -8,6 +8,7 @@ class FakeProvider:
         self.llm_config = SimpleNamespace(model="deepseek-flash", max_tokens=4096, api_key="test")
         self.token_scale = token_scale
         self.summary_calls = 0
+        self.summary_prompts = []
         self.fail_summary = False
 
     def count_tokens(self, text):
@@ -24,6 +25,7 @@ class FakeProvider:
 
     def chat_completion(self, **kwargs):
         self.summary_calls += 1
+        self.summary_prompts.append(kwargs["user_prompt"])
         if self.fail_summary:
             raise RuntimeError("offline")
         return "保留用户目标、文章主题和修改约束。"
@@ -79,6 +81,39 @@ def test_prepare_history_compresses_old_turns_and_keeps_recent_turns():
     assert manager.last_report is not None
     assert manager.last_report.anchor_coverage == 1.0
     assert manager.last_report.verified
+
+
+def test_prepare_history_only_merges_messages_not_already_in_summary():
+    provider = FakeProvider(token_scale=1)
+    manager = ContextManager(provider)
+    manager.SOFT_LIMIT_TOKENS = 10_000
+    transcript = messages(10, width=4_000)
+
+    _, summary, _, compressed = manager.prepare_history(transcript)
+    assert compressed
+    assert provider.summary_calls == 1
+
+    recent, same_summary, _, compressed_again = manager.prepare_history(
+        transcript,
+        summary=summary,
+    )
+    assert not compressed_again
+    assert same_summary == summary
+    assert provider.summary_calls == 1
+    assert recent == transcript[-len(recent) :]
+
+    extended = transcript + [
+        {"role": "assistant", "content": "new assistant turn"},
+        {"role": "user", "content": "new user turn"},
+    ]
+    manager.prepare_history(extended, summary=summary)
+
+    assert provider.summary_calls == 2
+    delta_prompt = provider.summary_prompts[-1].split("需要合并的新增历史：", 1)[1]
+    assert "turn-4" in delta_prompt
+    assert "turn-5" in delta_prompt
+    assert "turn-0" not in delta_prompt
+    assert manager.last_report.source_messages == 2
 
 
 def test_compress_falls_back_locally_when_summary_model_fails():

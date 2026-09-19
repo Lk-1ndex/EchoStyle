@@ -210,55 +210,75 @@ def _parse_chat_input(value: Any) -> Tuple[str, List[Any]]:
     return str(getattr(value, "text", "") or ""), list(getattr(value, "files", []) or [])
 
 
+def _stream_upload_to_file(uploaded_file: Any, destination: Any) -> str:
+    """Copy an upload without materializing an additional whole-file bytes object."""
+    digest = hashlib.sha256()
+    read = getattr(uploaded_file, "read", None)
+    seek = getattr(uploaded_file, "seek", None)
+    if callable(read):
+        if callable(seek):
+            seek(0)
+        while True:
+            chunk = read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            destination.write(chunk)
+        if callable(seek):
+            seek(0)
+        return digest.hexdigest()
+
+    getbuffer = getattr(uploaded_file, "getbuffer", None)
+    if callable(getbuffer):
+        payload = getbuffer()
+    else:
+        payload = uploaded_file.getvalue()
+    digest.update(payload)
+    destination.write(payload)
+    return digest.hexdigest()
+
+
 def _extract_uploaded_files(
     uploaded_files: Sequence[Any],
     coordinator: CoordinatorAgent,
     known_hashes: set[str],
 ) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
-    pending: List[Tuple[Any, bytes, str]] = []
+    articles: List[Dict[str, Any]] = []
     skipped: List[str] = []
-    for uploaded_file in uploaded_files:
-        payload = uploaded_file.getvalue()
-        digest = hashlib.sha256(payload).hexdigest()
-        if digest in known_hashes:
-            skipped.append(uploaded_file.name)
-            continue
-        pending.append((uploaded_file, payload, digest))
-
-    if not pending:
-        return [], [], skipped
-
-    temp_paths: List[Path] = []
-    source_meta: Dict[str, Tuple[str, str]] = {}
+    last_error: Exception | None = None
     state = AgentContext()
-    try:
-        sources: List[str] = []
-        for uploaded_file, payload, digest in pending:
+
+    for uploaded_file in uploaded_files:
+        temp_path: Path | None = None
+        try:
             suffix = Path(uploaded_file.name).suffix.lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-                temp_file.write(payload)
+                digest = _stream_upload_to_file(uploaded_file, temp_file)
                 temp_path = Path(temp_file.name)
-            temp_paths.append(temp_path)
-            sources.append(str(temp_path))
-            source_meta[temp_path.stem] = (Path(uploaded_file.name).stem, digest)
 
-        articles = coordinator.extract_sources(sources, state=state)
-        for article in articles:
-            original_title, digest = source_meta.get(
-                str(article.get("title", "")),
-                (str(article.get("title") or "未命名文件"), ""),
-            )
-            article["title"] = original_title
-            if digest:
+            if digest in known_hashes:
+                skipped.append(uploaded_file.name)
+                continue
+
+            extracted = coordinator.extract_sources([str(temp_path)], state=state)
+            for article in extracted:
+                article["title"] = Path(uploaded_file.name).stem
                 article["document_id"] = digest
+                articles.append(article)
+            if extracted:
                 known_hashes.add(digest)
-        return articles, state.execution_logs, skipped
-    finally:
-        for temp_path in temp_paths:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        except Exception as exc:
+            last_error = exc
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    if not articles and last_error is not None:
+        raise last_error
+    return articles, state.execution_logs, skipped
 
 
 def _extract_wechat_urls(

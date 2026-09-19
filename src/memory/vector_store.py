@@ -177,8 +177,7 @@ class VectorStore:
         if not candidates:
             return []
 
-        query_embs = self.model_provider.get_embeddings([query])
-        query_dense = query_embs[0] if query_embs else None
+        query_dense = self._query_embedding(query, require_dense=require_dense)
 
         rank_window = max(top_k * 3, 20)
         ranked = self._dense_rank_candidates(
@@ -276,8 +275,7 @@ class VectorStore:
         rank_window = max(top_k * 3, 20)
 
         # 1. 密集向量检索通道 (Dense Retrieval) - 共享 _dense_rank_candidates 准入与排序
-        query_embs = self.model_provider.get_embeddings([query])
-        query_dense = query_embs[0] if query_embs else None
+        query_dense = self._query_embedding(query, require_dense=require_dense)
 
         dense_ranked = self._dense_rank_candidates(
             candidates=candidates,
@@ -327,6 +325,16 @@ class VectorStore:
         # 按 RRF 得分降序排列，得分相同者按 id 确定性升序排序（彻底根除依赖列表入库顺序造成的隐式偏置）
         rrf_scores.sort(key=lambda x: (-x[0], str(x[1].get("id", ""))))
         return [c for score, c in rrf_scores[:top_k]]
+
+    def _query_embedding(self, query: str, require_dense: bool) -> Optional[List[float]]:
+        """Fetch a query vector, preserving sparse fallback in production mode."""
+        try:
+            query_embs = self.model_provider.get_embeddings([query])
+        except EmbeddingUnavailableError:
+            if require_dense:
+                raise
+            return None
+        return query_embs[0] if query_embs else None
 
 
     def search(self, query: str, top_k: int = 3, profile_id: Optional[str] = None) -> List[Dict[str, Any]]:

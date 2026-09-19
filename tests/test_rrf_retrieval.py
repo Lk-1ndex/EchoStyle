@@ -494,3 +494,35 @@ def test_dense_search_require_dense_parameter():
             # require_dense=False 时返回空列表，不抛出异常
             res = store.dense_search("查询", top_k=1, require_dense=False)
             assert res == []
+
+
+def test_hybrid_search_falls_back_to_sparse_when_embedding_provider_is_down():
+    from unittest.mock import patch
+
+    import pytest
+
+    from src.core.exceptions import EmbeddingUnavailableError
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        store = VectorStore(storage_path=str(Path(tmp_dir) / "fallback_store.json"))
+        store.chunks = [
+            {
+                "id": "matching",
+                "content": "边界条件决定非厄米系统的谱结构。",
+                "embedding": [1.0, 0.0],
+            },
+            {
+                "id": "unrelated",
+                "content": "红烧牛肉面的家常做法。",
+                "embedding": [0.0, 1.0],
+            },
+        ]
+
+        outage = EmbeddingUnavailableError("provider down")
+        with patch.object(store.model_provider, "get_embeddings", side_effect=outage):
+            results = store.hybrid_search("非厄米谱结构", top_k=1, require_dense=False)
+            assert [item["id"] for item in results] == ["matching"]
+
+        with patch.object(store.model_provider, "get_embeddings", side_effect=outage):
+            with pytest.raises(EmbeddingUnavailableError, match="provider down"):
+                store.hybrid_search("非厄米谱结构", top_k=1, require_dense=True)
