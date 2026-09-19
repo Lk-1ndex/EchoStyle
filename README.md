@@ -118,7 +118,7 @@ uv sync
 .\.venv\Scripts\activate
 ```
 
-复杂排版或扫描版 PDF 需要独立安装 MinerU 4（不会污染项目虚拟环境）：
+项目中的 PDF 统一使用 MinerU 4 解析（不会污染项目虚拟环境）：
 ```bash
 uv tool install --python 3.12 "mineru>=4.0,<5"
 mineru-kit models download --tier basic --small-backend onnx
@@ -135,18 +135,27 @@ mineru-kit models download --tier standard --small-backend onnx --vlm-engine lla
 ```yaml
 llm:
   api_key: "sk-xxxxxx"
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-flash"  # API ID，对应 DeepSeek-V4.1-Flash
   max_tokens: 4096
 
 embedding:
-  api_key: "sk-xxxxxx"
-  base_url: "https://api.deepseek.com/v1"
-  model: "text-embedding-v3"
+  api_key: "sk-xxxxxx"  # 硅基流动 API Key，与 DeepSeek Key 分开
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "Pro/BAAI/bge-m3"
 
 agent:
   max_reflections: 2       # Critic 触发反思重写的最大轮次
   quality_threshold: 80.0  # 质检合格分阈值
+
+extractor:
+  pdf_engine: "mineru"                  # PDF 统一走 MinerU；失败时自动回退 MarkItDown
+  mineru_tier: "basic"
+  mineru_timeout: 900                    # 单个 PDF 最大解析秒数
+  mineru_intra_op_num_threads: 2         # 保守线程上限，降低峰值内存
+  mineru_inter_op_num_threads: 1
+  mineru_pdf_render_threads: 1
+  mineru_malloc_trim: true
 ```
 
 ---
@@ -171,13 +180,27 @@ python main.py benchmark --failure
 python main.py benchmark --ab
 ```
 
-### 方式二：启动 Web 可视化交互大屏
+### 方式二：启动对话式 Web 工作台
 ```bash
 streamlit run src/web/app.py
 ```
-- **【Tab 1: 样文感知与提取】**：输入公众号链接、Word `.docx` 或 PDF 文档，查看正文抽取与去噪清洗。旧版 `.doc` 请先转换为 `.docx`；公众号若要求网页验证，可上传文章正文 `.md` 文件。
-- **【Tab 2: 深度文风指纹与记忆库】**：一键解构作者的客观 Stylometrics 指标（平均句长、标准差、STTR、标点熵），并实时测试 Style Memory 的向量检索与篇章结构定向召回。
-- **【Tab 3: 智能创作与闭环评测】**：输入新主题，实时监控状态机跳转、草稿演进与 Critic 批注，查看成文与 EchoEval 多维评分卡。
+
+在聊天输入框中直接附加 Word、PDF、Markdown 或文本文件，然后用自然语言提出任务。`ConversationAgent` 会通过结构化决策选择文档问答、文风建模、画像写作或稿件修改；原有 Coordinator、Extractor、Analyst、Writer、Critic 与 FSM 质量闭环继续作为受控工具执行。微信公众号文章链接也可直接粘贴到对话中。
+
+示例：
+
+- `总结这两篇论文的核心结论，并标出来源。`
+- `分析这些文章的文风，建立“技术评论”画像。`
+- `按照这些文件的风格，写一篇 1500 字的中文文章。`
+- `把上一稿第二段改得更通俗，其他部分保持不变。`
+
+聊天记录和已解析附件目前属于当前 Streamlit 会话；点击“新建对话”或重启服务后会清空。已经建立的完整文风画像与 Style Memory 会继续写入本地持久化文件并在重启后恢复。
+
+#### 上下文与自动压缩
+
+每次发送消息前，系统会按实际分词结果估算历史、附件和文风画像占用的 Token。当有效上下文达到应用软上限的 75%（默认软上限 32K，通常约 24K 时触发），会自动压缩较早的对话，不需要手动点击按钮。最近 6 条消息保持原文，其余历史由摘要模型压缩为不超过约 1,200 Token 的事实摘要，并直接传给路由、问答和写作链路。
+
+压缩不是无校验地“让模型自由总结”：用户消息中的目标、硬性约束、主题、格式和附件名会额外以原文锚点保留；摘要模型失败或没有 API Key 时会使用确定性的本地回退摘要。每次压缩都会记录方法、保留消息数和锚点覆盖率，输入框会显示 `Auto · anchors xx%`。这不能在理论上保证摘要与原文语义绝对等价，但能把关键约束从抽象摘要中独立保护出来，并在摘要异常时可观测、可回退。
 
 ### 方式三：CLI 命令行生产管道
 ```bash
@@ -191,7 +214,7 @@ python main.py distill -i "sample1.md" "sample2.md" -n "独立思考风"
 python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什么真挚的文风在当下更稀缺？" -o "final_article.md"
 ```
 
-新建模的档案带有持久化 `profile_id`，切片只在当前档案内检索或清空。默认记忆库为 `profiles/style_memory_v2.json`；旧 `profiles/style_memory.json` 原样保留，不自动读取、迁移或删除。缺少 ID 的旧档案仍可解析，但写作与召回前必须重新运行 `distill` 建模。LLM 裁判不可用或返回无效评分时，写作会报错终止，不会用默认分生成报告。
+新建模的完整 `DeepStyleProfile` 会保存到 `profiles/deep_style_profiles_v2.json`，Web UI 重启后自动恢复最后激活的档案，也可在侧边栏切换历史档案。向量切片按 `profile_id` 隔离，默认记忆库为 `profiles/style_memory_v2.json`；旧 `profiles/style_memory.json` 原样保留，不自动读取、迁移或删除。缺少 ID 的旧档案仍可解析，但写作与召回前必须重新运行 `distill` 建模。LLM 裁判不可用或返回无效评分时，写作会报错终止，不会用默认分生成报告。
 
 ---
 
@@ -217,7 +240,7 @@ EchoStyle/
 │   ├── extractors/    # 微信/Word/PDF 提取、版面复杂度感知 (inspector) 与文本净化 (sanitizer)
 │   ├── analyzer/      # 统计语言学特征计算 (stylometrics, STTR, 标点熵) 与文风逆向蒸馏
 │   ├── memory/        # 长期风格记忆库 (Style-Aware RAG, 倒数排名融合 RRF 混合检索)
-│   ├── agents/        # 严格 FSM 智能体体系 (Coordinator, ToolRegistry, Writer, Critic, Extractor, Analyst)
+│   ├── agents/        # 对话 Supervisor 与严格 FSM 智能体体系 (Conversation, Coordinator, Writer, Critic, Extractor, Analyst)
 │   ├── evaluation/    # 模块化 EchoEval 评测体系
 │   │   ├── lexical_metrics.py     # 词汇级指标 (STTR, 套话惩罚)
 │   │   ├── rhythm_metrics.py      # 节奏与韵律偏离度 (Rhythm Deviation)
@@ -225,7 +248,7 @@ EchoStyle/
 │   │   ├── composite_eval.py      # 统一优化目标函数 (EchoScore)
 │   │   ├── judge.py               # 多角色评估员面板与独立条件盲审裁决 (Holdout Evaluator)
 │   │   └── metrics.py             # 兼容统一门面 (Facade)
-│   └── web/           # Streamlit 可视化工作台
+│   └── web/           # Streamlit 对话式工作台
 ├── experiments/       # 科学实验与评测基准套件
 │   ├── ablation_study.py    # 7 组严格单变量消融实验 (7-Condition Matrix)
 │   ├── scaling_study.py     # 20 篇样本规模渐近收敛实验 (MSE Curve)

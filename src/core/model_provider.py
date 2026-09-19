@@ -1,9 +1,10 @@
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 import httpx
 import tiktoken
 from src.core.config import LLMConfig, EmbeddingConfig
-from src.core.exceptions import ModelProviderError
+from src.core.exceptions import EmbeddingUnavailableError, ModelProviderError
 
 
 class ModelProvider:
@@ -15,6 +16,10 @@ class ModelProvider:
     """
 
     MODEL_CONTEXT_WINDOWS = {
+        "deepseek-flash": 1_000_000,
+        "deepseek-v4.1-flash": 1_000_000,
+        "deepseek-v4-flash": 1_000_000,
+        "deepseek-v4-pro": 1_000_000,
         "deepseek-chat": 65536,
         "deepseek-reasoner": 65536,
         "gpt-4o": 128000,
@@ -22,6 +27,15 @@ class ModelProvider:
         "claude-3-5-sonnet": 200000,
         "qwen2.5-72b": 32768,
         "default": 32768,
+    }
+
+    # Provider-side ceilings from the DeepSeek model catalog. The request-level
+    # ``max_tokens`` setting may be (and usually is) much smaller.
+    MODEL_MAX_OUTPUTS = {
+        "deepseek-flash": 384_000,
+        "deepseek-v4.1-flash": 384_000,
+        "deepseek-v4-flash": 384_000,
+        "deepseek-v4-pro": 384_000,
     }
 
     def __init__(
@@ -71,7 +85,7 @@ class ModelProvider:
         max_retries: int = 3,
     ) -> str:
         temp = temperature if temperature is not None else self.llm_config.temperature
-        m_tokens = max_tokens if max_tokens is not None else self.llm_config.max_tokens
+        m_tokens = self.request_output_cap(max_tokens)
 
         safe_sys_prompt, safe_user_prompt = self.fit_context_window(system_prompt, user_prompt)
 
@@ -128,14 +142,7 @@ class ModelProvider:
         根据任务形态预设比例，并在 Critic 质检失败触发多轮重构时（retry_count > 0），
         自适应将更多 Token 配额倾斜向审校批注，实现精准定向修复。
         """
-        model_name = self.llm_config.model.lower()
-        max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
-        for key, window in self.MODEL_CONTEXT_WINDOWS.items():
-            if key in model_name:
-                max_window = window
-                break
-
-        available_tokens = max(3000, max_window - self.llm_config.max_tokens - 1000)
+        available_tokens = self.input_token_budget()
 
         # 动态配比定义 (Persona, Style, Memory, Task, Critique)
         mode_ratios = {
@@ -184,14 +191,7 @@ class ModelProvider:
 
     def fit_context_window(self, system_prompt: str, user_prompt: str) -> Tuple[str, str]:
         """通用的保底滑窗检查"""
-        model_name = self.llm_config.model.lower()
-        max_window = self.MODEL_CONTEXT_WINDOWS.get("default", 32768)
-        for key, window in self.MODEL_CONTEXT_WINDOWS.items():
-            if key in model_name:
-                max_window = window
-                break
-
-        available = max(3000, max_window - self.llm_config.max_tokens - 1000)
+        available = self.input_token_budget()
         sys_tokens = self.count_tokens(system_prompt)
         user_tokens = self.count_tokens(user_prompt)
 
@@ -208,6 +208,44 @@ class ModelProvider:
             user_prompt = self.truncate_tokens(user_prompt, remaining)
 
         return system_prompt, user_prompt
+
+    @classmethod
+    def context_window_for_model(cls, model: Optional[str] = None) -> int:
+        """Return the configured context window for a model name or alias."""
+        model_name = (model or "").lower()
+        # Prefer the longest alias so ``deepseek-v4.1-flash`` is not confused
+        # with a shorter legacy alias if more are added later.
+        for key in sorted(cls.MODEL_CONTEXT_WINDOWS, key=len, reverse=True):
+            if key != "default" and key in model_name:
+                return cls.MODEL_CONTEXT_WINDOWS[key]
+        return cls.MODEL_CONTEXT_WINDOWS["default"]
+
+    @classmethod
+    def max_output_for_model(cls, model: Optional[str] = None) -> Optional[int]:
+        model_name = (model or "").lower()
+        for key in sorted(cls.MODEL_MAX_OUTPUTS, key=len, reverse=True):
+            if key in model_name:
+                return cls.MODEL_MAX_OUTPUTS[key]
+        return None
+
+    def input_token_budget(self, safety_margin: int = 1000) -> int:
+        """Maximum prompt tokens reserved after the configured output cap."""
+        window = self.context_window_for_model(self.llm_config.model)
+        return max(3000, window - self.request_output_cap() - safety_margin)
+
+    def request_output_cap(self, requested: Optional[int] = None) -> int:
+        """Return the output cap that will actually be sent to the provider.
+
+        ``LLMConfig.max_tokens`` is an application-level default.  Providers
+        can impose a lower ceiling, so never send a larger request when a
+        known model limit is available.
+        """
+        configured = self.llm_config.max_tokens if requested is None else requested
+        configured = max(1, int(configured))
+        provider_limit = self.max_output_for_model(self.llm_config.model)
+        if provider_limit is not None:
+            configured = min(configured, provider_limit)
+        return configured
 
     def _execute_chat_http(
         self,
@@ -236,13 +274,36 @@ class ModelProvider:
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
+        # DeepSeek's thinking controls are not part of the OpenAI-compatible API contract.
+        if urlparse(self.llm_config.base_url).hostname == "api.deepseek.com":
+            effort = self.llm_config.thinking_effort
+            if json_mode or effort == "off":
+                payload["thinking"] = {"type": "disabled"}
+            elif effort != "auto":
+                payload["thinking"] = {"type": "enabled"}
+                payload["reasoning_effort"] = effort
+
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"].strip()
 
-    def get_embeddings(self, texts: List[str], timeout: float = 30.0) -> Optional[List[List[float]]]:
+    def has_embedding_credentials(self) -> bool:
+        """Whether an embedding request has usable credentials after fallback resolution."""
+        api_key = self.embedding_config.api_key or self.llm_config.api_key
+        return bool(api_key and api_key.strip())
+
+    def get_embeddings(self, texts: List[str], timeout: Optional[float] = None) -> Optional[List[List[float]]]:
+        """Generate embeddings in bounded batches and fail loudly on provider errors.
+
+        ``None`` is reserved for the intentional sparse-only mode where no API key
+        is configured. Once credentials exist, request failures raise instead of
+        silently persisting chunks without vectors.
+        """
+        if not texts:
+            return []
+
         api_key = self.embedding_config.api_key or self.llm_config.api_key
         base_url = self.embedding_config.base_url or self.llm_config.base_url
         if not api_key:
@@ -253,20 +314,71 @@ class ModelProvider:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        payload = {
-            "model": self.embedding_config.model,
-            "input": texts,
-        }
+        request_timeout = timeout if timeout is not None else self.embedding_config.timeout
+        batch_size = self.embedding_config.batch_size
+        max_retries = self.embedding_config.max_retries
+        all_embeddings: List[List[float]] = []
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, headers=headers, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return [item["embedding"] for item in data["data"]]
-        except Exception:
-            pass
-        return None
+        with httpx.Client(timeout=request_timeout) as client:
+            for batch_start in range(0, len(texts), batch_size):
+                batch = texts[batch_start : batch_start + batch_size]
+                payload = {
+                    "model": self.embedding_config.model,
+                    "input": batch,
+                }
+
+                for attempt in range(max_retries + 1):
+                    response: Optional[httpx.Response] = None
+                    try:
+                        response = client.post(url, headers=headers, json=payload)
+                        response.raise_for_status()
+                        body = response.json()
+                        raw_items = body.get("data") if isinstance(body, dict) else None
+                        if not isinstance(raw_items, list):
+                            raise ValueError("响应缺少 data 数组")
+
+                        indexed_items = sorted(
+                            raw_items,
+                            key=lambda item: item.get("index", 0) if isinstance(item, dict) else 0,
+                        )
+                        embeddings = [item["embedding"] for item in indexed_items]
+                        if len(embeddings) != len(batch):
+                            raise ValueError(
+                                f"返回向量数量不匹配: 期望 {len(batch)}，实际 {len(embeddings)}"
+                            )
+                        if any(not isinstance(embedding, list) or not embedding for embedding in embeddings):
+                            raise ValueError("响应包含空向量或非法向量")
+
+                        all_embeddings.extend(embeddings)
+                        break
+                    except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+                        status = response.status_code if response is not None else None
+                        retryable = status is None or status in {429, 500, 502, 503, 504}
+                        if retryable and attempt < max_retries:
+                            retry_after = response.headers.get("Retry-After") if response is not None else None
+                            try:
+                                delay = float(retry_after) if retry_after is not None else -1.0
+                            except (TypeError, ValueError):
+                                delay = -1.0
+                            if delay < 0:
+                                delay = self.embedding_config.retry_base_delay * (2 ** attempt)
+                            time.sleep(min(delay, 60.0))
+                            continue
+
+                        detail = ""
+                        if response is not None:
+                            detail = response.text.strip().replace("\n", " ")[:300]
+                        status_text = f"HTTP {status}" if status is not None else exc.__class__.__name__
+                        raise EmbeddingUnavailableError(
+                            f"Embedding 请求失败 ({status_text})，批次起点 {batch_start}"
+                            + (f": {detail}" if detail else "")
+                        ) from exc
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise EmbeddingUnavailableError(
+                            f"Embedding 响应格式无效，批次起点 {batch_start}: {exc}"
+                        ) from exc
+
+        return all_embeddings
 
     def count_tokens(self, text: str) -> int:
         if self.tokenizer:

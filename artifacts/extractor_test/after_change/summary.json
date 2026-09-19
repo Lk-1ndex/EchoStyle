@@ -1,0 +1,60 @@
+{
+  "configured_pdf_engine": "mineru",
+  "mineru_timeout": 900,
+  "threads": {
+    "intra": 2,
+    "inter": 1,
+    "render": 1
+  },
+  "results": [
+    {
+      "file": "2004_Berry_Physics_of_nonhermitian_degeneracies.pdf",
+      "engine_used": "pdf_mineru",
+      "seconds": 92.73,
+      "chars": 27035,
+      "nonempty_lines": 109,
+      "headings": [
+        "Physics of nonhermitian degeneracies ∗)",
+        "1 Introduction",
+        "2 Hermitian and nonhermitian generalities",
+        "3 Nonhermitian nonphysics of a pile of plates [7]",
+        "4 Linewidths of unstable lasers [9]",
+        "5 Atoms diffracted by imaginary crystals of light [15]",
+        "6 Crystal optics with absorption and chirality [18]",
+        "7 A nontrivial square root of zero toy [25]",
+        "References"
+      ],
+      "cid_artifacts": 0,
+      "control_chars": 0,
+      "html_tags": 0,
+      "output": "E:\\EchoStyle\\artifacts\\extractor_test\\after_change\\2004_Berry_Physics_of_nonhermitian_degeneracies.md"
+    },
+    {
+      "file": "2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.pdf",
+      "engine_used": "pdf_mineru",
+      "seconds": 83.64,
+      "chars": 42595,
+      "nonempty_lines": 91,
+      "headings": [
+        "Exceptional point engineered glass slide for microscopic thermal mapping",
+        "Results",
+        "Discussion",
+        "Methods",
+        "References",
+        "Acknowledgements",
+        "Author contributions",
+        "Additional information"
+      ],
+      "cid_artifacts": 0,
+      "control_chars": 0,
+      "html_tags": 0,
+      "output": "E:\\EchoStyle\\artifacts\\extractor_test\\after_change\\2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.md"
+    }
+  ],
+  "logs": [
+    "[02:10:33] [STATE: IDLE -> PARSING] 开始处理样文输入源: C:\\Users\\likun\\Desktop\\引用文献\\2004_Berry_Physics_of_nonhermitian_degeneracies.pdf",
+    "[02:10:33] [STATE: PARSING -> PARSING] PDF 版面诊断: 检测到标准单栏电子版 PDF，字符流完整，使用极速引擎秒级解析 => PDF 统一使用 MinerU（MarkItDown 仅作失败回退）",
+    "[02:12:06] [STATE: PARSING -> PARSING] 开始处理样文输入源: C:\\Users\\likun\\Desktop\\引用文献\\2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.pdf",
+    "[02:12:06] [STATE: PARSING -> PARSING] PDF 版面诊断: 检测到疑似双栏/学术排版，推荐 MinerU 深度视觉引擎重构人类阅读流 => PDF 统一使用 MinerU（MarkItDown 仅作失败回退）"
+  ]
+}

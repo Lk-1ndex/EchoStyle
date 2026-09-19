@@ -1,10 +1,11 @@
 # 大模型 API 配置 (支持 OpenAI 兼容格式，如 DeepSeek, Claude, GPT-4o, Qwen, Ollama 等)
 llm:
   api_key: "your-api-key-here"
-  base_url: "https://api.deepseek.com/v1"  # 默认使用 DeepSeek，也可换成任何兼容地址
-  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com"  # DeepSeek 官方 OpenAI 兼容地址
+  model: "deepseek-flash"               # API ID，对应 DeepSeek-V4.1-Flash
   temperature: 0.7
   max_tokens: 4096
+  thinking_effort: "auto"              # auto / off / low / high / max；仅官方 DeepSeek 接口生效
 
 # 独立 Holdout 评测裁判配置 (留空则默认复用 llm 配置，但独立实例化并使用 temperature=0.0 进行流程隔离；支持不同模型如 claude / gpt-4o 实现跨模型盲审)
 evaluator:
@@ -16,9 +17,13 @@ evaluator:
 
 # 向量 Embedding 模型配置 (支持 OpenAI 兼容格式，用于 Dense 与 Hybrid RAG 检索)
 embedding:
-  api_key: ""                            # 留空则默认复用 llm.api_key
-  base_url: ""                           # 留空则默认复用 llm.base_url
-  model: "text-embedding-3-small"        # 向量模型名称
+  api_key: "your-siliconflow-api-key-here"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "Pro/BAAI/bge-m3"
+  batch_size: 32                         # 单次请求文本数；免费/共享接口建议控制批量
+  timeout: 60                            # 单批请求超时秒数
+  max_retries: 3                         # 429/5xx/网络异常重试次数
+  retry_base_delay: 1.0                  # 指数退避基础秒数
 
 # 多智能体调度与状态机配置
 agent:
@@ -27,8 +32,13 @@ agent:
 
 # 解析与清洗配置
 extractor:
-  pdf_engine: "auto"  # 可选: "auto" (按版面选择)、"markitdown" (极速模式) 或 "mineru" (深度视觉模式)
+  pdf_engine: "mineru"  # PDF 统一使用 MinerU；markitdown 仅用于显式对照或 MinerU 失败回退
   mineru_command: "mineru-kit"
   mineru_tier: "basic"  # basic 约需 2 GB 内存；standard 约需 8 GB 内存（高质量但更吃内存）
+  mineru_timeout: 900
+  mineru_intra_op_num_threads: 2
+  mineru_inter_op_num_threads: 1
+  mineru_pdf_render_threads: 1
+  mineru_malloc_trim: true
   clean_noise: true
   repair_linebreaks: true

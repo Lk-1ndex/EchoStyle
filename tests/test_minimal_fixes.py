@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from src.agents.analyst_agent import AnalystAgent
+from src.agents.conversation_agent import ConversationAction, ConversationAgent, ConversationResult
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.critic_agent import CriticAgent
 from src.agents.state import AgentState, AgentStatus
@@ -23,6 +24,7 @@ from src.core.models import (
 )
 from src.evaluation.judge import LLMJudge
 from src.memory.memory_manager import MemoryManager
+from src.memory.profile_store import ProfileStore
 from src.memory.vector_store import VectorStore
 
 
@@ -43,7 +45,8 @@ def make_profile(profile_id="profile-a"):
 def test_new_profile_id_round_trip_and_legacy_profile_rejected(tmp_path):
     store = VectorStore(storage_path=str(tmp_path / "memory.json"))
     manager = MemoryManager(vector_store=store)
-    analyst = AnalystAgent(LLMConfig(), manager)
+    profile_store = ProfileStore(str(tmp_path / "profiles.json"))
+    analyst = AnalystAgent(LLMConfig(), manager, profile_store=profile_store)
     analyst.distiller.distill = lambda *args, **kwargs: make_profile().qualitative
 
     profile = analyst.run(
@@ -53,6 +56,7 @@ def test_new_profile_id_round_trip_and_legacy_profile_rejected(tmp_path):
     assert str(UUID(profile.profile_id)) == profile.profile_id
     assert DeepStyleProfile.model_validate_json(profile.model_dump_json()).profile_id == profile.profile_id
     assert manager.get_memory_stats(profile_id=profile.profile_id)["total_chunks"] == 1
+    assert ProfileStore(str(tmp_path / "profiles.json")).get_active().profile_id == profile.profile_id
 
     old_data = profile.model_dump(exclude={"profile_id"})
     old_profile = DeepStyleProfile.model_validate(old_data)
@@ -229,7 +233,7 @@ def test_online_ablation_uses_private_store_and_cleans_on_failure(tmp_path, monk
     assert current_file.read_text(encoding="utf-8") == "current sentinel"
 
 
-def test_web_extract_build_write_and_threshold_without_network(tmp_path, monkeypatch):
+def test_web_chat_build_write_and_profile_restore_without_network(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
     monkeypatch.chdir(tmp_path)
@@ -238,44 +242,81 @@ def test_web_extract_build_write_and_threshold_without_network(tmp_path, monkeyp
     with patch("src.core.config.load_config", return_value=config):
         app = AppTest.from_file(Path(__file__).resolve().parents[1] / "src/web/app.py", default_timeout=10).run()
     assert not app.exception
-    assert app.button[-1].disabled
+    assert len(app.chat_input) == 1
+    assert app.session_state["messages"] == []
+    assert any("What should we write?" in item.value for item in app.markdown)
 
-    app.text_area[0].set_value("https://example.com/sample").run()
-    sample = {"title": "Sample", "content": "A source paragraph with enough text.", "engine_used": "mock", "char_count": 36}
-    with patch.object(CoordinatorAgent, "extract_sources", return_value=[sample]) as extract:
-        next(b for b in app.button if "Extractor Agent" in b.label).click().run()
+    effort_selector = next(item for item in app.select_slider if item.label == "模型思考强度")
+    effort_selector.set_value("low").run()
     assert not app.exception
-    assert isinstance(extract.call_args.kwargs["state"], AgentState)
-    assert len(app.session_state["samples"]) == 1
+    assert app.session_state["config"].llm.thinking_effort == "low"
+    assert app.session_state["conversation_agent"].model_provider.llm_config.thinking_effort == "low"
+
+    sample = {"title": "Sample", "content": "A source paragraph with enough text.", "engine_used": "mock", "char_count": 36}
+    app.session_state["documents"] = [sample]
 
     app.slider[0].set_value(95.0).run()
     assert app.session_state["coordinator"].critic_agent.quality_threshold == 95.0
 
     profile = make_profile()
-    with patch.object(CoordinatorAgent, "build_style", return_value=profile) as build:
-        next(b for b in app.button if "Analyst Agent" in b.label).click().run()
+    build_result = ConversationResult(
+        content="Profile ready",
+        action=ConversationAction.BUILD_STYLE,
+        profile=profile,
+    )
+    with patch.object(ConversationAgent, "respond", return_value=build_result) as respond:
+        app.chat_input[0].set_value("分析这些文件的文风").run()
     assert not app.exception
-    assert isinstance(build.call_args.kwargs["state"], AgentState)
+    assert respond.call_args.kwargs["documents"] == [sample]
     assert app.session_state["deep_profile"].profile_id == profile.profile_id
+    assert app.session_state["profile_store"].get(profile.profile_id).name == profile.name
 
-    app.text_input[2].set_value("A new article topic").run()
+    with patch("src.core.config.load_config", return_value=config):
+        restored_app = AppTest.from_file(
+            Path(__file__).resolve().parents[1] / "src/web/app.py",
+            default_timeout=10,
+        ).run()
+    assert not restored_app.exception
+    assert restored_app.session_state["deep_profile"].profile_id == profile.profile_id
+
+    second_profile = make_profile("profile-b")
+    restored_app.session_state["profile_store"].save(second_profile, make_active=False)
+    restored_app.run()
+    profile_selector = restored_app.selectbox[0]
+    profile_selector.select_index(1).run()
+    assert not restored_app.exception
+    assert restored_app.session_state["deep_profile"].profile_id == second_profile.profile_id
+    assert restored_app.session_state["profile_store"].get_active().profile_id == second_profile.profile_id
+
     final_state = AgentState(topic="A new article topic")
-    with patch.object(CoordinatorAgent, "generate_article", return_value=("Final article", EvaluationReport(overall_score=90.0), final_state)) as write:
-        next(b for b in app.button if "Multi-Agent" in b.label).click().run()
+    write_result = ConversationResult(
+        content="Final article",
+        action=ConversationAction.WRITE,
+        profile=profile,
+        article="Final article",
+        report=EvaluationReport(overall_score=90.0),
+        logs=final_state.execution_logs,
+    )
+    with patch.object(ConversationAgent, "respond", return_value=write_result) as write:
+        app.chat_input[0].set_value("写一篇新文章").run()
     assert not app.exception
-    assert write.call_args is not None, [(i, w.label.encode("unicode_escape")) for i, w in enumerate(app.text_input)]
-    assert isinstance(write.call_args.kwargs["state"], AgentState)
-    assert app.session_state["final_art"] == "Final article"
-    assert app.button[-1].disabled
+    assert write.call_args is not None
+    assert app.session_state["last_article"] == "Final article"
+    assert app.session_state["messages"][-1]["report"]["overall_score"] == 90.0
 
-    with patch.object(CoordinatorAgent, "generate_article", side_effect=EvaluationUnavailableError("offline")):
-        next(b for b in app.button if "Multi-Agent" in b.label).click().run()
+    with patch.object(ConversationAgent, "respond", side_effect=EvaluationUnavailableError("offline")):
+        app.chat_input[0].set_value("再写一篇").run()
     assert not app.exception
-    assert "final_art" not in app.session_state
-    assert "eval_report" not in app.session_state
+    assert app.session_state["last_article"] == "Final article"
+    assert "offline" in app.session_state["messages"][-1]["content"]
+
+    next(button for button in app.button if button.label == "新建对话").click().run()
+    assert not app.exception
+    assert app.session_state["messages"] == []
+    assert any("What should we write?" in item.value for item in app.markdown)
 
 
-def test_web_clear_is_scoped_and_legacy_profile_cannot_retrieve(tmp_path, monkeypatch):
+def test_web_clear_documents_does_not_clear_style_memory(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
     monkeypatch.chdir(tmp_path)
@@ -289,15 +330,13 @@ def test_web_clear_is_scoped_and_legacy_profile_cannot_retrieve(tmp_path, monkey
             {"id": "b", "content": "Another profile data", "metadata": {"profile_id": "beta"}},
         ])
 
-    app.session_state["deep_profile"] = make_profile(None)
-    app.run()
-    assert next(b for b in app.button if "清空当前档案" in b.label).disabled
-    assert next(b for b in app.button if "执行检索测试" in b.label).disabled
-    assert not any("Multi-Agent" in b.label for b in app.button)
-
     app.session_state["deep_profile"] = make_profile("alpha")
+    app.session_state["documents"] = [{"title": "Temporary", "content": "Session document"}]
+    app.session_state["document_hashes"] = {"temporary-hash"}
     app.run()
-    next(b for b in app.button if "清空当前档案" in b.label).click().run()
+    next(b for b in app.button if "清空文件" in b.label).click().run()
     assert not app.exception
-    assert store.get_all(profile_id="alpha") == []
+    assert app.session_state["documents"] == []
+    assert app.session_state["document_hashes"] == set()
+    assert len(store.get_all(profile_id="alpha")) == 1
     assert len(store.get_all(profile_id="beta")) == 1

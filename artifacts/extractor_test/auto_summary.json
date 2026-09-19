@@ -1,0 +1,36 @@
+[
+  {
+    "file": "2004_Berry_Physics_of_nonhermitian_degeneracies.pdf",
+    "engine": "pdf_markitdown",
+    "seconds": 1.07,
+    "chars": 27526,
+    "lines": 17,
+    "headings": 0,
+    "table_rows": 0,
+    "math_markers": 0,
+    "replacement_chars": 0,
+    "output": "E:\\EchoStyle\\artifacts\\extractor_test\\2004_Berry_Physics_of_nonhermitian_degeneracies.auto.md",
+    "preview": "Physics of nonhermitian degeneracies∗)M.V. Berry∗∗)H.H.Wills Physics Laboratory, Tyndall Avenue,Bristol BS8 1TL, UKReceived 1 July 2004Asummary,withreferencesandadditionalcomments,ofatalkdeliveredattheSecondInternational Workshop on Pseudohermitian Hamiltonians in QuantumPhysics (Prague,14–16 June 2004). After explaining some general features of nonhermitian degeneracies(‘exceptionalpoints’),severalapplications areoutlined:tomultiplereflectionsinapileofplates, linewidths of unstable lasers, atom diffraction by light, and crystal optics.PACS: 03.65.YzKey words: matrices, degeneracies, quantum1 IntroductionNonhermitian hamiltonians usually enter physics as a description of part of asystem, as a result of a decision not to incorporate all freedoms — for examplethosedescribingdissipation.Examp",
+    "logs": [
+      "[01:12:02] [STATE: IDLE -> PARSING] 开始处理样文输入源: C:\\Users\\likun\\Desktop\\引用文献\\2004_Berry_Physics_of_nonhermitian_degeneracies.pdf",
+      "[01:12:02] [STATE: PARSING -> PARSING] PDF 排版探测: 检测到标准单栏电子版 PDF，字符流完整，使用极速引擎秒级解析 => 决策选用引擎 [markitdown]"
+    ]
+  },
+  {
+    "file": "2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.pdf",
+    "engine": "pdf_mineru",
+    "seconds": 88.16,
+    "chars": 43000,
+    "lines": 181,
+    "headings": 0,
+    "table_rows": 0,
+    "math_markers": 88,
+    "replacement_chars": 0,
+    "output": "E:\\EchoStyle\\artifacts\\extractor_test\\2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.auto.md",
+    "preview": "ARTICLE\n\nDOI: 10.1038/s41467-018-04251-3\n\n**OPEN**\n\n# Exceptional point engineered glass slide for microscopic thermal mapping\n\nHan Zhao<sup>1</sup>, Zhaowei Chen<sup>2</sup>, Ruogang Zhao 2 & Liang Feng<sup>3</sup>\n\nThermal sensing with fine spatial resolution is important to the study of many scientific areas. While modern microscopy systems allow optical detection at high spatial resolution, their intrinsic functions are mainly focused on imaging but limited in detecting other physical parameters, for example, mapping thermal variations. Here, with a coating of an optical exceptional point structure, we demonstrate a low-cost but efficient multifunctional microscope slide, supporting real-time monitoring and mapping of temperature distribution and heat transport in addition to conventio",
+    "logs": [
+      "[01:12:03] [STATE: IDLE -> PARSING] 开始处理样文输入源: C:\\Users\\likun\\Desktop\\引用文献\\2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.pdf",
+      "[01:12:03] [STATE: PARSING -> PARSING] PDF 排版探测: 检测到疑似双栏/学术排版，推荐 MinerU 深度视觉引擎重构人类阅读流 => 决策选用引擎 [mineru]"
+    ]
+  }
+]

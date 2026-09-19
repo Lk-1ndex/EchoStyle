@@ -2,6 +2,14 @@ from src.core.config import LLMConfig
 from src.core.model_provider import ModelProvider
 
 
+def test_deepseek_flash_defaults_and_context_window():
+    config = LLMConfig()
+
+    assert config.base_url == "https://api.deepseek.com"
+    assert config.model == "deepseek-flash"
+    assert ModelProvider.MODEL_CONTEXT_WINDOWS["deepseek-flash"] == 1_000_000
+
+
 def test_dynamic_token_budget_modes():
     provider = ModelProvider(LLMConfig(api_key="mock_key", model="gpt-4o"))
 

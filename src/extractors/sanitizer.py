@@ -1,3 +1,4 @@
+import html
 import re
 from typing import List
 
@@ -22,12 +23,20 @@ class TextSanitizer:
     ]
 
     @classmethod
-    def clean(cls, text: str, repair_linebreaks: bool = True) -> str:
+    def clean(
+        cls,
+        text: str,
+        repair_linebreaks: bool = True,
+        clean_pdf_artifacts: bool = False,
+    ) -> str:
         """
         执行完整清洗流水线
         """
         if not text:
             return ""
+
+        if clean_pdf_artifacts:
+            text = cls._clean_pdf_artifacts(text)
 
         # 1. 移除 Markdown 图片标记 (如 ![图片说明](url)) 以及文字 [图片] 占位符
         text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
@@ -46,6 +55,21 @@ class TextSanitizer:
         text = re.sub(r"\n{3,}", "\n\n", text)  # 超过 2 个换行压缩为 2 个
 
         return text.strip()
+
+    @staticmethod
+    def _clean_pdf_artifacts(text: str) -> str:
+        """清除 PDF 转 Markdown 常见的控制字符、cid 占位符和 HTML 包装。"""
+        # MinerU 偶尔会把字体编码残留写成不可见控制字符，避免污染统计特征。
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u200B-\u200F\u202A-\u202E]", "", text)
+        text = re.sub(r"\(cid:\s*\d+\)", "", text, flags=re.IGNORECASE)
+        text = html.unescape(text).replace("\u00a0", " ")
+
+        # 保留脚注/上标中的文字，只移除 MinerU 添加的 HTML 标签本身。
+        text = re.sub(r"<small[^>]*>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</small>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?(?:span|sup|sub)(?:\s[^>]*)?>", "", text, flags=re.IGNORECASE)
+        return text
 
     @classmethod
     def _repair_broken_lines(cls, text: str) -> str:

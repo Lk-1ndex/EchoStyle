@@ -56,6 +56,18 @@ def test_markdown_structure_preservation():
     assert "> 这是引言块" in cleaned
 
 
+def test_pdf_artifact_cleanup_removes_control_cid_and_html_wrappers():
+    raw_text = "正文\x03\x06 (cid:42) <small><span class=\"footnote\">脚注<sup>1</sup></span></small>"
+    cleaned = TextSanitizer.clean(raw_text, clean_pdf_artifacts=True)
+
+    assert "\x03" not in cleaned
+    assert "\x06" not in cleaned
+    assert "cid:42" not in cleaned
+    assert "<small>" not in cleaned
+    assert "<span" not in cleaned
+    assert "脚注1" in cleaned
+
+
 def test_style_profile_system_prompt():
     profile = StyleProfile(
         name="测试文风",

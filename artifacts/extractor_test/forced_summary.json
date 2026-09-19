@@ -1,0 +1,30 @@
+[
+  {
+    "file": "2004_Berry_Physics_of_nonhermitian_degeneracies.pdf",
+    "requested_engine": "mineru",
+    "engine": "pdf_mineru",
+    "seconds": 97.11,
+    "chars": 27265,
+    "lines": 215,
+    "headings": 0,
+    "table_rows": 0,
+    "math_markers": 152,
+    "replacement_chars": 0,
+    "output": "E:\\EchoStyle\\artifacts\\extractor_test\\2004_Berry_Physics_of_nonhermitian_degeneracies.mineru.md",
+    "preview": "# Physics of nonhermitian degeneracies ∗)\n\nM.V. Berry ∗∗)\n\nH.H. Wills Physics Laboratory, Tyndall Avenue, Bristol BS8 1TL, UK\n\nReceived 1 July 2004\n\nA summary, with references and additional comments, of a talk delivered at the Second International Workshop on Pseudohermitian Hamiltonians in Quantum Physics (Prague, 14–16 June 2004). After explaining some general features of nonhermitian degeneracies (‘exceptional points’), several applications are outlined: to multiple reflections in a pile of "
+  },
+  {
+    "file": "2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.pdf",
+    "requested_engine": "markitdown",
+    "engine": "pdf_markitdown",
+    "seconds": 1.65,
+    "chars": 43531,
+    "lines": 31,
+    "headings": 0,
+    "table_rows": 1,
+    "math_markers": 0,
+    "replacement_chars": 0,
+    "output": "E:\\EchoStyle\\artifacts\\extractor_test\\2018_NatureCommunications_Exceptional_point_engineered_glass_slide_thermal_mapping.markitdown.md",
+    "preview": "ARTICLEOPENDOI:10.1038/s41467-018-04251-3Exceptional point engineered glass slide formicroscopic thermal mappingHan Zhao1, Zhaowei Chen2, Ruogang Zhao 2 & Liang Feng3Thermalsensingwithfinespatialresolutionisimportanttothestudyofmanyscientificareas.While modern microscopy systems allow optical detection at high spatial resolution, theirintrinsic functions are mainly focused on imaging but limited in detecting other physicalparameters, for example, mapping thermal variations. Here, with a coating "
+  }
+]

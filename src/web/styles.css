@@ -1,0 +1,734 @@
+:root {
+  --echo-ink: #202a33;
+  --echo-muted: #71808e;
+  --echo-line: #e4e9ed;
+  --echo-accent: #0d9488;
+  --echo-control-size: 34px;
+  --echo-control-bg: #f3f5f6;
+  --echo-control-hover: #eaedef;
+  --echo-control-ink: #65717a;
+}
+
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"] {
+  background: #ffffff;
+  color: var(--echo-ink);
+}
+
+[data-testid="stMainBlockContainer"] {
+  position: relative;
+  max-width: 900px;
+  min-height: calc(100vh - 250px);
+  padding: 1.2rem 1.5rem 12rem;
+}
+
+[data-testid="stSidebar"] {
+  background: #f7f9fa;
+  border-right: 1px solid var(--echo-line);
+}
+
+.echo-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  position: relative;
+  width: 33px;
+  height: 33px;
+  border-radius: 10px;
+  background: var(--echo-accent);
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.echo-mark::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: -6px;
+  width: 7px;
+  height: 17px;
+  border-right: 2px solid var(--echo-accent);
+  border-radius: 50%;
+}
+
+.echo-logo {
+  display: block;
+  width: 78px;
+  height: 78px;
+  object-fit: contain;
+}
+
+.echo-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 23px;
+  position: absolute;
+  top: 40vh;
+  left: 50%;
+  width: min(100%, 600px);
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.echo-welcome .echo-mark {
+  width: 62px;
+  height: 62px;
+  border-radius: 18px;
+  font-size: 43px;
+}
+
+.echo-welcome .echo-mark::after {
+  top: 14px;
+  right: -10px;
+  width: 13px;
+  height: 34px;
+  border-right-width: 3px;
+}
+
+.echo-welcome h1 {
+  margin: 0;
+  color: var(--echo-ink);
+  font-size: 34px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+[data-testid="stChatMessage"] {
+  padding: 0.7rem 0;
+  scroll-margin-top: 2rem;
+  border: 0;
+  background: transparent;
+  gap: 0;
+}
+
+[data-testid="stChatMessageAvatarAssistant"],
+[data-testid="stChatMessageAvatarUser"] {
+  display: none;
+}
+
+[data-testid="stChatMessageContent"] {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  color: var(--echo-ink);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+[data-testid="stChatMessageContent"][aria-label="Chat message from user"] {
+  width: fit-content;
+  max-width: 78%;
+  margin-left: auto !important;
+  margin-right: 0 !important;
+  padding: 10px 17px;
+  border-radius: 18px;
+  background: #eef5f5;
+  overflow-wrap: anywhere;
+}
+
+[data-testid="stChatMessageContent"][aria-label="Chat message from user"] p {
+  margin: 0;
+}
+
+[data-testid="stChatMessageContent"] .stExpander {
+  margin-top: 0.7rem;
+  border: 1px solid #edf0f2;
+  border-radius: 10px;
+  background: #fbfcfc;
+}
+
+[data-testid="stBottom"] {
+  background: #ffffff;
+  padding: 1rem 1.5rem 1.4rem;
+}
+
+[data-testid="stAppScrollToBottomContainer"] {
+  scroll-padding-top: 2rem;
+  scroll-padding-bottom: 15rem;
+}
+
+[data-testid="stBottom"] > div {
+  max-width: 852px;
+  margin: 0 auto;
+}
+
+[data-testid="stChatInput"] {
+  position: relative;
+  width: min(100%, 852px);
+  margin: 0 auto;
+  min-height: 122px;
+  border: 1px solid #dfe4e7;
+  border-radius: 24px;
+  background: #ffffff !important;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+[data-testid="stChatInput"] > div,
+[data-testid="stChatInputTextArea"] {
+  background: #ffffff !important;
+}
+
+[data-testid="stChatInput"] > div {
+  min-height: 120px;
+  padding: 0 !important;
+  gap: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+[data-testid="stChatInput"] > div > div:first-child {
+  width: 100%;
+  gap: 0 !important;
+}
+
+[data-testid="stChatInput"]:focus-within {
+  border-color: #c8d0d5;
+  box-shadow: none;
+}
+
+[data-testid="stChatInputTextArea"] textarea,
+[data-testid="stChatInput"] textarea {
+  min-height: 120px !important;
+  max-height: 240px;
+  padding: 21px 54px 48px 16px !important;
+  background: transparent;
+  color: var(--echo-ink);
+  font-size: 16px;
+  line-height: 1.55;
+  resize: none;
+}
+
+[data-testid="stChatInputTextArea"] textarea:focus,
+[data-testid="stChatInputTextArea"] textarea:focus-visible,
+[data-testid="stChatInput"] textarea:focus,
+[data-testid="stChatInput"] textarea:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+[data-testid="stChatInput"] textarea::placeholder {
+  color: #95a1ad;
+}
+
+[data-testid="stChatInputFileUploadButton"] {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 2;
+  width: var(--echo-control-size);
+  height: var(--echo-control-size);
+}
+
+[data-testid="stChatInputFileUploadButton"] button {
+  display: grid;
+  place-items: center;
+  width: var(--echo-control-size);
+  min-width: var(--echo-control-size);
+  height: var(--echo-control-size);
+  min-height: var(--echo-control-size);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #273139;
+}
+
+[data-testid="stChatInputFileUploadButton"] button:hover,
+[data-testid="stChatInputFileUploadButton"] button:focus-visible {
+  background: var(--echo-control-bg);
+  color: #45535c;
+}
+
+[data-testid="stChatInputSubmitButton"] {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: var(--echo-control-size);
+  min-width: var(--echo-control-size);
+  height: var(--echo-control-size);
+  min-height: var(--echo-control-size);
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: var(--echo-accent);
+  color: #ffffff;
+}
+
+[data-testid="stChatInputSubmitButton"]:disabled {
+  background: var(--echo-control-bg);
+  color: #87939b;
+}
+
+/* The toolbar is rendered before Streamlit's fixed chat input.  Keep the
+   context meter and the compact thinking popover aligned with the composer. */
+.st-key-composer_toolbar {
+  position: fixed;
+  z-index: 1002;
+  left: 50%;
+  /* Streamlit reserves a bottom band for chat_input.  This baseline aligns
+     the controls with its attachment/submit row on the default desktop
+     viewport; the mobile rule below follows the shorter band. */
+  bottom: 5.1rem;
+  width: min(852px, calc(100vw - 3rem));
+  height: 42px;
+  padding: 0 58px 0 50px;
+  transform: translate(-50%, -6px);
+  pointer-events: none;
+}
+
+.st-key-composer_toolbar > div {
+  height: 42px;
+  align-items: center;
+}
+
+.st-key-composer_toolbar [data-testid="stHorizontalBlock"] {
+  height: 42px;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.st-key-composer_toolbar [data-testid="stColumn"] {
+  min-width: 0;
+  justify-content: center;
+}
+
+.st-key-composer_toolbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  justify-content: flex-end;
+}
+
+.st-key-composer_toolbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+  justify-content: flex-end;
+}
+
+.st-key-composer_toolbar [data-testid="stMarkdownContainer"] {
+  overflow: hidden;
+}
+
+.st-key-composer_toolbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child [data-testid="stMarkdownContainer"] {
+  overflow: visible;
+}
+
+.echo-context-control {
+  display: grid;
+  place-items: center;
+  position: relative;
+  width: var(--echo-control-size);
+  height: var(--echo-control-size);
+  margin-left: auto;
+  transform: translateY(-8px);
+  border-radius: 50%;
+  cursor: help;
+  pointer-events: auto;
+  outline: none;
+}
+
+.echo-context-control:focus-visible {
+  outline: 2px solid #dfe5e8;
+  outline-offset: -4px;
+}
+
+.echo-context-ring {
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    #717b82 0 var(--context-used, 0%),
+    #dfe4e7 var(--context-used, 0%) 100%
+  );
+}
+
+.echo-context-ring::after {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: #ffffff;
+  content: "";
+}
+
+.echo-context-tooltip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 1010;
+  width: 212px;
+  padding: 13px 15px;
+  transform: translateX(-50%) translateY(3px);
+  border: 1px solid #e1e5e8;
+  border-radius: 20px;
+  background: #ffffff;
+  color: #30363b;
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 9px 26px rgba(25, 43, 54, 0.1);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+}
+
+.echo-context-control:hover .echo-context-tooltip,
+.echo-context-control:focus-visible .echo-context-tooltip {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 500ms, 500ms, 500ms;
+}
+
+.echo-context-mode {
+  color: #7d8d96;
+  font-size: 10px;
+  line-height: 30px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* See the synchronization note in app.py. */
+.st-key-compat_profile_selector {
+  display: none !important;
+}
+
+.st-key-thinking_effort_live_bridge {
+  display: none !important;
+}
+
+.st-key-composer_toolbar [data-testid="stButton"],
+.st-key-composer_toolbar [data-testid="stPopover"],
+.st-key-composer_toolbar [data-testid="stSlider"] {
+  pointer-events: auto;
+}
+
+.st-key-thinking_effort_popover,
+.st-key-thinking_effort_popover [data-testid="stPopover"] {
+  width: auto !important;
+  max-width: 190px !important;
+  pointer-events: auto;
+}
+
+.st-key-thinking_effort_popover {
+  margin-left: auto !important;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"] {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 190px !important;
+  height: var(--echo-control-size);
+  min-height: var(--echo-control-size);
+  padding: 0 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #737d84;
+  font-size: 14px;
+  font-weight: 400;
+  box-shadow: none;
+  justify-content: center;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"]:hover {
+  border-color: #d8dee2;
+  background: var(--echo-control-bg);
+  color: #59656d;
+  box-shadow: none;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"]:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  outline: 2px solid #dfe5e8;
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"][aria-expanded="true"] {
+  border-color: #d8dee2;
+  background: var(--echo-control-bg);
+  color: #59656d;
+  box-shadow: none;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"] > div > div:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-key-thinking_effort_popover [data-testid="stPopoverButton"] > div > [aria-hidden="true"] {
+  display: none;
+}
+
+/* PopoverBody is rendered in a portal, outside composer_toolbar. */
+[data-testid="stPopoverBody"] {
+  width: 280px !important;
+  min-width: 280px !important;
+  max-height: none !important;
+  overflow: visible !important;
+  margin-top: 0 !important;
+  /* The portal starts at the trigger's left edge. Align the card's right
+     edge with the trigger, like the compact Codex control. */
+  margin-left: calc(var(--thinking-trigger-width, 108px) - 280px) !important;
+  padding: 11px 14px 10px !important;
+  border: 1px solid #e5eaee !important;
+  border-radius: 18px !important;
+  background: #ffffff !important;
+  box-shadow: 0 12px 30px rgba(25, 43, 54, 0.14) !important;
+  pointer-events: auto;
+}
+
+[data-testid="stPopoverBody"] > [data-testid="stVerticalBlock"] {
+  row-gap: 7px !important;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+  position: relative;
+  height: 38px !important;
+  min-height: 45px !important;
+  align-items: flex-start !important;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stColumn"] {
+  min-width: 0 !important;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  width: 100% !important;
+  flex: 1 1 100% !important;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 28px !important;
+  flex: 0 0 28px !important;
+}
+
+.echo-thinking-heading {
+  min-width: 0;
+  padding: 0;
+  text-align: center;
+}
+
+.echo-thinking-level {
+  color: #258fe9;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.echo-thinking-level span {
+  color: #7b8993;
+  font-size: 20px;
+  font-weight: 400;
+  vertical-align: -1px;
+}
+
+.echo-thinking-model {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #7b8790;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-key-thinking_effort_reset [data-testid="stButton"] button {
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #7a8790;
+}
+
+.st-key-thinking_effort_reset [data-testid="stButton"] button:hover,
+.st-key-thinking_effort_reset [data-testid="stButton"] button:focus-visible {
+  background: #f0f4f6;
+  color: #3d4e5b;
+}
+
+.st-key-thinking_effort_reset [data-testid="stButton"] p {
+  display: none;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] {
+  height: 42px !important;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] label {
+  display: none;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"],
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] {
+  height: 42px !important;
+  cursor: pointer;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:first-child {
+  position: relative;
+  height: 30px !important;
+  border-radius: 999px;
+  background: #dce6ed !important;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:first-child::before {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--thinking-progress, 0%);
+  border-radius: inherit;
+  background: #3b9ff0;
+  content: "";
+  transition: width 90ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:first-child::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background:
+    radial-gradient(circle 2px at 0% 50%, var(--thinking-dot-0, #c5d1d9) 0 2px, transparent 2.4px),
+    radial-gradient(circle 2px at 25% 50%, var(--thinking-dot-1, #c5d1d9) 0 2px, transparent 2.4px),
+    radial-gradient(circle 2px at 50% 50%, var(--thinking-dot-2, #c5d1d9) 0 2px, transparent 2.4px),
+    radial-gradient(circle 2px at 75% 50%, var(--thinking-dot-3, #c5d1d9) 0 2px, transparent 2.4px),
+    radial-gradient(circle 2px at 100% 50%, var(--thinking-dot-4, #c5d1d9) 0 2px, transparent 2.4px);
+  content: "";
+  pointer-events: none;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:nth-child(2) {
+  z-index: 2;
+  width: 34px !important;
+  height: 34px !important;
+  border: 2px solid #dce5eb !important;
+  border-radius: 50%;
+  background: #ffffff !important;
+  box-shadow: 0 1px 4px rgba(25, 43, 54, 0.14);
+  transition:
+    left 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+  will-change: left;
+}
+
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [data-testid="stSliderThumbValue"],
+[data-testid="stPopoverBody"] [data-testid="stSlider"] [data-testid="stSliderTickBar"] {
+  display: none !important;
+}
+
+@media (min-width: 701px) {
+  /* Streamlit centers the main column in the space remaining beside its
+     300px sidebar.  Fixed elements do not inherit that offset, so mirror
+     half of the sidebar width while it is expanded. */
+  body:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-composer_toolbar {
+    left: calc(50% + 150px);
+    width: min(852px, calc(100vw - 508px));
+    padding-right: 58px;
+  }
+
+  body:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stPopoverBody"] {
+    margin-left: 0 !important;
+  }
+}
+
+@media (max-width: 700px) {
+  [data-testid="stMainBlockContainer"] {
+    min-height: calc(100vh - 220px);
+    padding: 0.9rem 1rem 13rem;
+  }
+
+  .echo-welcome {
+    top: 40vh;
+  }
+
+  .echo-welcome h1 {
+    font-size: 25px;
+  }
+
+  [data-testid="stChatMessageContent"][aria-label="Chat message from user"] {
+    max-width: 88%;
+  }
+
+  [data-testid="stBottom"] {
+    padding: 0.5rem 0.75rem 0.8rem;
+  }
+
+  .st-key-composer_toolbar {
+    bottom: 4.55rem;
+    /* stBottom keeps a 1.75rem side inset on narrow screens; match the
+       resulting chat-input width so the selector ends before send. */
+    width: calc(100vw - 3.5rem);
+    padding: 0 56px 0 48px;
+  }
+
+  .st-key-composer_toolbar [data-testid="stHorizontalBlock"] {
+    gap: 0.2rem;
+    flex-wrap: nowrap !important;
+  }
+
+  .st-key-composer_toolbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1) {
+    flex: 1 1 0% !important;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  .st-key-composer_toolbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+    flex: 0 0 170px !important;
+    width: 170px !important;
+  }
+
+  .st-key-thinking_effort_popover [data-testid="stPopoverButton"] {
+    max-width: 170px !important;
+    font-size: 14px;
+  }
+
+  .echo-context-tooltip {
+    width: min(212px, calc(100vw - 2rem));
+  }
+
+  [data-testid="stPopoverBody"] {
+    min-width: min(280px, calc(100vw - 2rem)) !important;
+    width: min(280px, calc(100vw - 2rem)) !important;
+    margin-left: 0 !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:first-child::before,
+  [data-testid="stPopoverBody"] [data-testid="stSlider"] [role="group"][data-orientation="horizontal"] > div[data-orientation="horizontal"] > div:nth-child(2),
+  .echo-context-tooltip {
+    transition: none !important;
+  }
+}

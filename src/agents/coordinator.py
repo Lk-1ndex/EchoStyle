@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.core.config import AppConfig
 from src.core.models import DeepStyleProfile, EvaluationReport
 from src.memory.memory_manager import MemoryManager
+from src.memory.profile_store import ProfileStore
 from .base import BaseAgent
 from .state import AgentState, AgentStatus
 from .tools import Tool, ToolRegistry, CritiqueAction
@@ -19,20 +20,31 @@ class CoordinatorAgent(BaseAgent):
     3. 完整实现 run() 契约规范，驱动写作、质检、反思重构全生命周期流转。
     """
 
-    def __init__(self, config: AppConfig, memory_manager: Optional[MemoryManager] = None):
+    def __init__(
+        self,
+        config: AppConfig,
+        memory_manager: Optional[MemoryManager] = None,
+        profile_store: Optional[ProfileStore] = None,
+    ):
         super().__init__(name="CoordinatorAgent", description="工作流调度中枢，负责受控工具编排与有限状态机驱动")
         self.config = config
         self.memory_manager = memory_manager or MemoryManager(
             embedding_config=config.embedding,
             llm_config=config.llm
         )
+        self.profile_store = profile_store
 
         # 初始化专业智能体节点
         self.extractor_agent = ExtractorAgent(
             mineru_cmd=config.extractor.mineru_command,
             mineru_tier=config.extractor.mineru_tier,
+            mineru_timeout=config.extractor.mineru_timeout,
+            mineru_intra_op_num_threads=config.extractor.mineru_intra_op_num_threads,
+            mineru_inter_op_num_threads=config.extractor.mineru_inter_op_num_threads,
+            mineru_pdf_render_threads=config.extractor.mineru_pdf_render_threads,
+            mineru_malloc_trim=config.extractor.mineru_malloc_trim,
         )
-        self.analyst_agent = AnalystAgent(config.llm, self.memory_manager)
+        self.analyst_agent = AnalystAgent(config.llm, self.memory_manager, profile_store=self.profile_store)
         self.writer_agent = WriterAgent(config.llm, self.memory_manager)
         self.critic_agent = CriticAgent(config.llm, quality_threshold=config.agent.quality_threshold)
 
@@ -78,6 +90,7 @@ class CoordinatorAgent(BaseAgent):
         word_count: Optional[int] = None,
         target_audience: Optional[str] = None,
         initial_draft: Optional[str] = None,
+        revision_instruction: Optional[str] = None,
         **kwargs
     ) -> Tuple[str, EvaluationReport, AgentState]:
         """
@@ -115,12 +128,21 @@ class CoordinatorAgent(BaseAgent):
         # 动态分支 2：创建初稿前检查点 (CheckPoint)
         state.create_checkpoint("pre_draft")
 
-        # 动态调用创作工具 (若传入 initial_draft 则直接复用为初稿，保障单变量实验绝对可控)
+        # 动态调用创作工具。消融实验可直接复用初稿；对话模式可先按用户要求定向修改。
         if initial_draft is not None:
-            draft = initial_draft
             if state.current_status == AgentStatus.IDLE:
                 state.transition_to(AgentStatus.DRAFTING, "加载外部初稿 (单变量严格对照)")
-            state.record_draft("WriterAgent", draft)
+            state.record_draft("UserDraft" if revision_instruction else "WriterAgent", initial_draft)
+            if revision_instruction:
+                state.transition_to(AgentStatus.CRITIQUING, "收到用户对现有稿件的定向修改要求。")
+                draft = self.tool_registry.get("draft_tool").execute(
+                    state,
+                    profile=active_profile,
+                    feedback=revision_instruction,
+                    previous_draft=initial_draft,
+                )
+            else:
+                draft = initial_draft
         else:
             draft = self.tool_registry.get("draft_tool").execute(state, profile=active_profile)
         state.create_checkpoint("first_draft")
@@ -204,6 +226,7 @@ class CoordinatorAgent(BaseAgent):
         target_audience: str = "大众读者",
         state: Optional[AgentState] = None,
         initial_draft: Optional[str] = None,
+        revision_instruction: Optional[str] = None,
     ) -> Tuple[str, EvaluationReport, AgentState]:
         """保持原有方法名兼容的统一包装"""
         st = state or AgentState()
@@ -215,6 +238,7 @@ class CoordinatorAgent(BaseAgent):
             word_count=word_count,
             target_audience=target_audience,
             initial_draft=initial_draft,
+            revision_instruction=revision_instruction,
         )
 
     def extract_sources(self, sources: List[str], state: Optional[AgentState] = None) -> List[Dict[str, Any]]:

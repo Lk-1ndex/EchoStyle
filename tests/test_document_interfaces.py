@@ -117,16 +117,16 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
             raise RuntimeError("offline extraction failed")
         return [{"title": Path(sources[0]).stem, "content": "Sample article body", "engine_used": "plain_text", "char_count": 19}]
 
+    chat_submission = SimpleNamespace(text="", files=[uploaded])
     with patch("src.core.config.load_config", return_value=config), patch.object(
-        st, "file_uploader", return_value=[uploaded]
+        st, "chat_input", return_value=chat_submission
     ), patch.object(CoordinatorAgent, "extract_sources", side_effect=extract) as extractor:
         app = AppTest.from_file(app_path, default_timeout=10).run()
         assert not app.exception
-        next(button for button in app.button if "Extractor Agent" in button.label).click().run()
 
     assert not app.exception
     assert extractor.call_args is not None
     assert not Path(extractor.call_args.args[0][0]).exists()
-    assert len(app.session_state["samples"]) == (0 if fails else 1)
+    assert len(app.session_state["documents"]) == (0 if fails else 1)
     if not fails:
-        assert app.session_state["samples"][0]["title"] == "sample"
+        assert app.session_state["documents"][0]["title"] == "sample"

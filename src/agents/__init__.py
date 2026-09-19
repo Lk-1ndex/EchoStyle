@@ -4,6 +4,7 @@ from .analyst_agent import AnalystAgent
 from .writer_agent import WriterAgent
 from .critic_agent import CriticAgent
 from .coordinator import CoordinatorAgent
+from .conversation_agent import ConversationAction, ConversationAgent, ConversationPlan, ConversationResult
 
 __all__ = [
     "BaseAgent",
@@ -14,4 +15,8 @@ __all__ = [
     "WriterAgent",
     "CriticAgent",
     "CoordinatorAgent",
+    "ConversationAction",
+    "ConversationAgent",
+    "ConversationPlan",
+    "ConversationResult",
 ]

@@ -5,7 +5,8 @@ from typing import Dict, Any
 class DocumentInspector:
     """
     文档复杂度与排版感知器：
-    自动分析输入文件的物理特征与排版复杂性，智能决策最佳解析引擎（MarkItDown 极速 vs MinerU 深度视觉）。
+    自动分析输入文件的物理特征与排版复杂性，输出诊断建议。
+    PDF 生产路径由 ExtractorAgent 统一使用 MinerU；这里的建议保留用于审计和日志。
     """
 
     @classmethod

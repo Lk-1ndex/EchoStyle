@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 from .base import BaseAgent
 from .state import AgentState, AgentStatus
@@ -7,6 +7,7 @@ from src.core.models import DeepStyleProfile
 from src.analyzer.stylometrics import StylometricsAnalyzer
 from src.analyzer.distiller import StyleDistiller
 from src.memory.memory_manager import MemoryManager
+from src.memory.profile_store import ProfileStore
 
 
 class AnalystAgent(BaseAgent):
@@ -15,10 +16,16 @@ class AnalystAgent(BaseAgent):
     双驱分析（TTR/统计语言学 + 质性解构），并将高价值语料切片持久化至 Style Memory。
     """
 
-    def __init__(self, llm_config: LLMConfig, memory_manager: MemoryManager):
+    def __init__(
+        self,
+        llm_config: LLMConfig,
+        memory_manager: MemoryManager,
+        profile_store: Optional[ProfileStore] = None,
+    ):
         super().__init__(name="AnalystAgent", description="负责作者文风统计建模、质性特征解构及语料向量化记忆")
         self.llm_config = llm_config
         self.memory_manager = memory_manager
+        self.profile_store = profile_store
         self.distiller = StyleDistiller(llm_config)
 
     def run(self, state: AgentState, sample_articles: List[dict], profile_name: str = "深度文风档案") -> DeepStyleProfile:
@@ -40,6 +47,8 @@ class AnalystAgent(BaseAgent):
             [a["content"] for a in sample_articles],
             profile_name=profile_name
         )
+        if self.distiller.last_retry_used:
+            state.execution_logs.append("[RECOVERY] 首次画像 JSON 无效，已通过分段 Schema 重建并恢复。")
 
         # 3. 融合为 DeepStyleProfile
         deep_profile = DeepStyleProfile(
@@ -55,6 +64,18 @@ class AnalystAgent(BaseAgent):
         for a in sample_articles:
             added = self.memory_manager.ingest_article(a["title"], a["content"], profile_id=deep_profile.profile_id)
             total_chunks_added += added
-        state.transition_to(AgentStatus.MODELING, f"成功向量化入库 {total_chunks_added} 个风格片段！")
+        if self.profile_store is not None:
+            try:
+                self.profile_store.save(deep_profile)
+            except Exception:
+                self.memory_manager.clear_memory(profile_id=deep_profile.profile_id)
+                raise
+        if self.memory_manager.vector_store.model_provider.has_embedding_credentials():
+            result_message = f"成功向量化入库 {total_chunks_added} 个风格片段，并持久化文风档案！"
+        else:
+            result_message = (
+                f"Embedding 未配置，已按稀疏检索模式保存 {total_chunks_added} 个风格片段，并持久化文风档案。"
+            )
+        state.transition_to(AgentStatus.MODELING, result_message)
 
         return deep_profile

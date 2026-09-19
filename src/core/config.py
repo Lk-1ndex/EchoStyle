@@ -1,27 +1,43 @@
 import os
 import yaml
 from pathlib import Path
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
     api_key: str = Field(default="", description="大模型 API Key")
-    base_url: str = Field(default="https://api.deepseek.com/v1", description="OpenAI 兼容 API 基础路径")
-    model: str = Field(default="deepseek-chat", description="模型名称")
+    base_url: str = Field(default="https://api.deepseek.com", description="OpenAI 兼容 API 基础路径")
+    model: str = Field(default="deepseek-flash", description="模型名称")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=4096)
+    thinking_effort: Literal["auto", "off", "low", "high", "max"] = Field(
+        default="auto", description="DeepSeek 思考强度；auto 使用模型默认设置"
+    )
 
 
 class EmbeddingConfig(BaseModel):
     api_key: str = Field(default="", description="向量 Embedding API Key (留空则复用 LLM)")
     base_url: str = Field(default="", description="Embedding 基础路径 (留空则复用 LLM)")
     model: str = Field(default="text-embedding-3-small", description="向量模型名称")
+    batch_size: int = Field(default=32, ge=1, le=256, description="单次 Embedding 请求的最大文本数")
+    timeout: float = Field(default=60.0, gt=0, description="单批 Embedding 请求超时秒数")
+    max_retries: int = Field(default=3, ge=0, le=10, description="Embedding 临时故障最大重试次数")
+    retry_base_delay: float = Field(default=1.0, ge=0, description="Embedding 指数退避基础秒数")
 
 
 class ExtractorConfig(BaseModel):
-    pdf_engine: str = Field(default="auto", description="auto (智能探测自适应), markitdown, 或 mineru")
+    pdf_engine: str = Field(
+        default="mineru",
+        description="PDF 统一使用 MinerU；markitdown 仅作为显式诊断模式或失败回退",
+    )
     mineru_command: str = Field(default="mineru-kit")
     mineru_tier: str = Field(default="basic", description="MinerU 本地模型档位: basic 或 standard")
+    mineru_timeout: int = Field(default=900, ge=1, description="单个 PDF 的 MinerU 最大运行秒数")
+    mineru_intra_op_num_threads: int = Field(default=2, ge=1, description="MinerU ONNX 算子线程数")
+    mineru_inter_op_num_threads: int = Field(default=1, ge=1, description="MinerU ONNX 算子间线程数")
+    mineru_pdf_render_threads: int = Field(default=1, ge=1, description="PDF 渲染线程数")
+    mineru_malloc_trim: bool = Field(default=True, description="解析结束时启用内存回收提示")
     clean_noise: bool = Field(default=True)
     repair_linebreaks: bool = Field(default=True)
 
@@ -45,6 +61,7 @@ class EvaluatorConfig(BaseModel):
             model=self.model.strip() if self.model and self.model.strip() else fallback.model,
             temperature=self.temperature,
             max_tokens=self.max_tokens or fallback.max_tokens,
+            thinking_effort=fallback.thinking_effort,
         )
 
 

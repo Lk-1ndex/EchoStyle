@@ -18,6 +18,7 @@ from src.core.config import load_config
 from src.core.models import DeepStyleProfile, StyleProfile
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.state import AgentState
+from src.memory.profile_store import ProfileStore
 
 console = Console()
 
@@ -57,7 +58,7 @@ def main():
 
     args = parser.parse_args()
     config = load_config()
-    coordinator = CoordinatorAgent(config)
+    coordinator = CoordinatorAgent(config, profile_store=ProfileStore())
     state = AgentState()
 
     if args.command == "extract":
