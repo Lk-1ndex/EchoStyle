@@ -1,270 +1,281 @@
-# EchoStyle 3.2 (基于多智能体FSM、7组严格单变量消融、20篇渐近收敛与模块化科学评测的个人文风建模系统)
+<p align="center">
+  <img src="src/web/assets/echostyle-logo.png" width="96" alt="EchoStyle logo">
+</p>
 
-从历史原创文章（微信公众号、Word、PDF）中自适应感知提取语料，结合 **统计语言学客观指纹 (Stylometrics, STTR, 节奏偏离度)** 与 **大模型语义深度解构** 建立高保真深层文风档案，依托 **Style-Aware Hybrid Memory (RRF 混合检索与篇章结构定向切片)** 长期积累，并通过 **严格有限状态机 (FSM)、快照回滚机制与多轮自审重构闭环 (Self-Reflection Loop)** 创作兼具作者呼吸节奏与独立思考质感的全新文章。
+<h1 align="center">EchoStyle</h1>
 
----
+<p align="center">
+  面向中文写作的多智能体文风建模、文档问答与可控创作工作台
+</p>
 
-## 🌟 核心架构与科学严谨性演进 (EchoStyle 3.2)
+EchoStyle 从 PDF、Word、Markdown、纯文本或微信公众号文章中提取内容，建立可持久化的个人文风画像与风格记忆，并通过对话完成资料问答、文风分析、文章创作和迭代修改。
 
-1. **严格单变量消融实验套件 (Strict Single-Variable Matrix)**：
-   - 严格单变量控制隔离 **Prompt Scaffolding、Style Profile、Dense 纯密集语义 RAG、Hybrid RRF 融合检索、Style-Aware 结构过滤与独立条件盲审 Critic 自审** 各模块的独立边际贡献：
-     - `Condition A0 (Vanilla LLM Base)`: 通用 LLM 外部基准（无 Profile / 无 Scaffolding / 无 RAG / 无 Critic）
-     - `Condition A1 (Scaffolding Base)`: WriterAgent 提示工程基准（有任务感知 Token 预算与呼吸节奏/防套话 scaffolding，无 Profile / 无 RAG / 无 Critic）
-     - `Condition B (+Profile Only)`: 在 A1 基础上显式注入 Profile，无 RAG / 无 Critic（**与 A1 构成严格单变量对照：B - A1 为 Style Profile 纯先验的真正独立贡献**）
-      - `Condition C1a (+Dense RAG)`: 纯密集语义向量余弦召回（`dense_search`，与 C1b 共享完全相同的 `_dense_rank_candidates` 候选准入阈值 `score > 0`、确定性 tie-break 与候选窗口，严格执行 Fail-Closed 阻断，拒绝静默降级）
-      - `Condition C1b (+Hybrid RRF RAG)`: 密集与稀疏词频倒数排名融合检索（Dense 通道与 C1a 保持完全一致的准入规则，引入带停用词过滤与二元词加权的稀疏检索，严格单变量隔离 RRF 融合机制，剔除零相关偏置）
-      - `Condition C2 (+Style-Aware RAG)`: 基于篇章结构的定向装配检索（`retrieve_dynamic_few_shots` 覆盖 `hook`、`quote`、`argument`，**与 C1b 构成严格单变量对照：C2 - C1b**）
-      - `Condition D (Full EchoStyle)`: **严格单变量受控与评测解耦**——复用 C2 检索快照与 C2 生成初稿 `art_c2`，由内部 Critic 自审重写；**终审由独立条件盲审评测器 (Condition-Blind Holdout Evaluator, temperature=0.0, 开启 strict Fail-Closed) 统一打分，杜绝 Critic 既当运动员又当裁判的 Evaluator Overfitting**
-    - **领域正交独立选题库 (Domain-Orthogonal Held-out Topics)**：消融评测题目涵盖职场、教育、城市生活、消费、旅行等跨领域题材，提示词仅保留纯客观任务与论述约束，彻底剥离风格特征词（无"犀利"、"体温"、"偏见"等提示），杜绝 Style Leakage。
-    - **分层配对统计建模与区块级 Fail-Closed (Hierarchical Paired Delta Statistics)**：边际增量直接基于配对差值（$\Delta[t, r] = C_{k}[t, r] - C_{k-1}[t, r]$）计算，严格区分 Topic 间变异与重复采样扰动，采用 Student-t 分布计算 95% 置信区间；任何单条件失败执行整组 7 条件配对区块作废（Fail-Closed Invalidation），杜绝样本不均衡偏差。
-   - **独立的 Holdout 评测模型配置支持**：评测器与内部 Critic 均支持独立模型配置 (`config.evaluator` 或 `EVALUATOR_MODEL` 环境变量)，可与生成模型解耦使用第三方模型（如 Generator: DeepSeek, Evaluator: Claude / GPT-4o），实现流程隔离与跨模型客观仲裁。
+项目当前优先验证中文写作。英文处理尚未作为主要准确性目标。
 
+## 主要能力
 
-2. **20 篇样本规模 Monte Carlo 子集重抽样收敛实验 (Monte Carlo Subsampling Scaling Experiment)**：
-   - 彻底打破“仅固定截取前 N 篇样本”的序列偏差质疑，引入 **50 组 Monte Carlo 无放回随机子集重抽样 (Repeated Random Subsampling)** 评估 1 篇、3 篇、5 篇、10 篇与 20 篇样本梯度。
-   - 引入语言学参数**均方误差 (MSE, Mean Squared Error)** 与 95% 置信区间：
-     $$\text{MSE} = \frac{1}{4} \left[ \left(\frac{\Delta \bar{L}}{\bar{L}_{20}}\right)^2 + \left(\frac{\Delta \sigma}{\sigma_{20}}\right)^2 + \left(\frac{\Delta \text{STTR}}{\text{STTR}_{20}}\right)^2 + \left(\frac{\Delta \text{Entropy}}{\text{Entropy}_{20}}\right)^2 \right]$$
-   - **统计严谨性澄清与 5 篇候选 Operating Point 定位**：
-     - 20 篇全集 MSE=0 与收敛度 100% 为当前封闭池内的数理定义基准参照系（Mathematical Definition by Reference）；
-     - 从 5 篇增至 10 篇，MSE 绝对值由 0.0098 降至 0.0043，在均方误差绝对尺度上下降了约 56.1%；之所以预设收敛度看起来仅从 91.0% 微升至 94.0%，是由于 $1 - \sqrt{\text{MSE}}$ 压缩尺度的数理特性；
-     - 结合语料接入成本、检索计算开销与特征逼近收益，5 篇严谨表述为“**当前成本—特征误差权衡下的候选 Operating Point**”，而非绝对断言的黄金平衡点；结论严格建立在同作者语料池内，跨作者泛化仍需外部基准验证。
+- **对话式工作台**：上传文件后直接用自然语言提出问题或写作任务。
+- **文档解析**：PDF 默认使用 MinerU，失败时回退到 MarkItDown；同时支持 DOCX、Markdown、TXT 和微信公众号链接。
+- **文风建模**：结合统计语言学指标与 LLM 语义分析生成 `DeepStyleProfile`。
+- **风格记忆**：将样文按篇章功能切片，使用 Dense + BM25 + RRF 进行检索。
+- **受控写作**：Coordinator 调度 Writer 与 Critic，在有限状态机中执行生成、评价、修改和回滚。
+- **连续对话**：自动估算上下文占用，并在接近上限时压缩较早消息。
+- **实验工具**：提供消融实验、样本规模实验、双盲评测和失败案例分析。
 
-3. **统一多维评测目标 ($\text{EchoScore}$)**：
-   - 确立统一量化目标函数，避免多指标冲突或帕累托前沿的解释混乱：
-     $$\text{EchoScore} = 0.35 \times \text{Fidelity} + 0.25 \times \text{DiscourseFit} + 0.20 \times \text{RhythmMatch} + 0.20 \times \text{LexicalAuth} - \text{ClichePenalty}$$
-   - 涵盖主观专家评分、宏观篇章拟合、微观节奏吻合度、词汇纯净质感与八股套话严厉惩罚。
-   - *(注：当前加权系数为面向工程感知的启发式配比，非标准科学公式，后续将通过真实人类成对偏好进行回归拟合校准。)*
+## 快速开始
 
-4. **节奏与韵律吻合度指标 (Rhythm Deviation)**：
-   - 废除盲目惩罚低句长方差的“AI 匀称性假说”，保护严谨、学术或沉稳型写作者的天然文风。
-   - 采用目标文风离散度偏离度：
-     $$\text{RhythmDeviation} = \frac{|\bar{L}_{gen} - \bar{L}_{target}|}{\bar{L}_{target}} + \frac{|\sigma_{gen} - \sigma_{target}|}{\sigma_{target}} + |\text{Ratio}_{\text{short}, gen} - \text{Ratio}_{\text{short}, target}|$$
-   - 衡量的是与作者本人的节奏吻合度，而非无差别强求句长剧烈起伏。
+### 1. 安装项目
 
-5. **篇章结构人手标注黄金基准 (`DISCOURSE_GOLD_BENCHMARK`)**：
-   - 为避免“大模型自我循环论证 (LLM Self-Evaluation Loop)”，构建包含权威人工标注真值的标准篇章功能测试集。
-   - 规则分类器与特征探测模块在黄金基准上达到 $\ge 90\%$ 的分类一致率（*当前为 11 样本启发式基准，存在规则共构局限，正推进构建 100+ 样本独立 held-out 集*）。
+需要 Python 3.10 或更高版本，并建议使用 [uv](https://docs.astral.sh/uv/) 管理环境。
 
-6. **任务感知启发式 Token 预算 (Task-Aware Heuristic Token Budget)**：
-   - 采用 BPE 粒度与场景启发式预算调配（长文、短帖、重写、深度分析）。
-   - **自适应故障重构**：当 Critic 触发反思改写时，自动为批注要点与批判约束增配 +5% 预算权重，已正式接入 WriterAgent 生产链路。
-
-7. **分层多角色评估员面板 (Multi-Persona Evaluator Panel)**：
-   - 引入三重视角评估员矩阵（离线回退支持客观特征裁决，杜绝固定偏见）：
-     - **普通大众读者 (General Reader)**：最看重行文顺畅度、阅读通俗性与无造作感
-     - **忠实读者 (Devoted Follower)**：对作者口癖、标志性观点与思维模式极度敏感
-     - **资深主编 (Chief Editor)**：严打 AI 味、违规八股词与篇章结构松散
-
-8. **系统失败模式与边界深度剖析 (Failure Modes Analysis)**：
-   - 正视工程落地边界，归纳并给出架构级解决方案：
-     - **CASE-01 跨领域题材冲突**：题材冲突侦测守卫与修辞平抑
-     - **CASE-02 冷启动样本匮乏**：语料字数准入门槛与纯统计降级
-     - **CASE-03 过度自审导致平庸化**：FSM 快照回滚保底机制 (`rollback_to('best_version')`，仅在超越历史最高分时更新快照)，已全面接入 Coordinator
-
-9. **高度模块化评测架构 (`src/evaluation/`)**：
-   - 彻底解耦巨型单体文件，拆分为 `lexical_metrics.py`、`rhythm_metrics.py`、`discourse_metrics.py`、`composite_eval.py`、`judge.py` 与兼容门面 `metrics.py`。
-
----
-
-## 📊 科学评测与实验基准矩阵
-
-### 1. 严格单变量消融实验套件与流程验证 (Ablation Study: Strict Single-Variable Matrix)
-
-#### A. 5×5 仿真流程验证矩阵 (5×5 Simulation Pipeline Verification — NOT Benchmark Result)
-
-> ⚠️ **免责声明与模式标记 (MOCK / SIMULATION PIPELINE VERIFICATION — NOT BENCHMARK RESULT)**：  
-> 仓库当前已实现 5 topics × 5 repeats 自动化消融评估流水线，但尚未完成全量真实在线 LLM 的并发实测。下表数据由离线分层统计桩 (Simulation Pipeline) 跑通生成，仿真数据用于验证分析管道能够识别以下差异，**绝不可视作最终实测 Benchmark 性能结论**。真实实测结果需配置有效 API Key 执行 `python main.py benchmark --ablation` 后生成归档于 `reports/ablation_study_report.md`。
-
-| 消融条件 | Scaffolding | Profile | Dense检索 | Hybrid RRF | 结构过滤 | Critic重写 | 独立盲审 | 篇章拟合 | 节奏吻合 | 用词质感 | 八股惩罚 | 跨主题均值 (Mean ± Std) | 95% 置信区间 (Student-t) | 严格单变量边际贡献与机制权衡 |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **A0 (Vanilla Base)** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 82.8 | 91.0 | 93.1 | -2.0 | **79.0 ± 0.8** | [78.1, 80.0] | 通用大模型零干预外部基准 |
-| **A1 (Scaffolding Base)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 85.5 | 87.6 | 92.6 | -0.0 | **82.2 ± 0.7** | [81.3, 83.1] | **+3.2 分 (相对 A0)**: Writer 提示工程、任务感知预算与防套话 Scaffolding 工程基准 |
-| **B (+Profile Only)** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | 90.1 | 73.3 | 92.2 | -0.0 | **87.4 ± 0.7** | [86.5, 88.3] | **+5.2 分 (相对 A1 严格单变量)**: 显式注入目标作者客观句法与质感 Profile 纯先验的独立净贡献 |
-| **C1a (+Dense RAG)**| ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | 94.7 | 99.0 | 94.9 | -0.0 | **93.4 ± 0.5** | [92.8, 94.0] | **+5.9 分 (相对 B)**: 密集语义召回连续语料段落，节奏高度平滑 |
-| **C1b (+Hybrid RRF RAG)**| ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | 95.4 | 93.7 | 95.0 | -0.0 | **92.0 ± 0.5** | [91.4, 92.7] | **-1.4 分 (相对 C1a)**: 词频 RRF 召回稀疏词，增强词汇命中多样性（已剔除零相关文档排名偏置） |
-| **C2 (+Style-Aware RAG)**| ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | 96.6 | 84.0 | 95.0 | -0.0 | **89.5 ± 0.5** | [88.9, 90.1] | **-2.5 分 (相对 C1b 严格单变量)**: 篇章拟合最优(+1.2)，但金句与论据异构拼接打乱句长节奏 |
-| **D (Full EchoStyle)**| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 97.4 | 80.4 | 95.2 | -0.0 | **89.3 ± 0.4** | [88.8, 89.8] | **-0.2 分 (相对 C2 严格单变量)**: 内部 Critic 自审清除八股违规，由独立 Condition-Blind 评测器裁决 |
-
-> 📌 **单次探索性摸底数据对照 (Single-Run Preliminary Result, 1 Topic × 1 Run)**：  
-> 前期单次摸底数据为 A: 80.5, B: 88.8, C1: 87.8, C2: 83.9, D: 87.8 (+3.9)。因单次运行无法消除大模型生成与采样的偶然性噪声 (Std = 0.0，95% CI 退化为单点)，仅作为早期的单点探索记录，不作为最终稳态 benchmark 结论。
-
-
-### 2. 20 篇样本规模 Monte Carlo 子集重抽样实测矩阵 (50-Iteration Repeated Random Subsampling)
-| 样本规模配置 | 平均总字数 | 平均句长 (字) | 句长离散度 (σ) | 标准化 STTR | 切片数 | 均方误差 MSE (Mean ± Std) | MSE 95% 置信区间 | 综合收敛度 (Mean ± Std) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1 篇 (极简冷启动)** | ~152 字 | 23.5 | 9.3 | 0.959 | 5 块 | 0.0484 ± 0.0349 | [0.0387, 0.0581] | **79.6% ± 8.3%** |
-| **3 篇 (初步稳定)** | ~446 字 | 23.1 | 9.7 | 0.957 | 17 块 | 0.0173 ± 0.0140 | [0.0134, 0.0211] | **87.8% ± 4.9%** |
-| **5 篇 (候选 Operating Point)** | ~743 字 | 23.3 | 9.7 | 0.955 | 28 块 | **0.0098 ± 0.0094** | **[0.0072, 0.0124]** | **91.0% ± 4.1%** |
-| **10 篇 (深度建模)** | ~1475 字 | 23.2 | 9.7 | 0.957 | 54 块 | 0.0043 ± 0.0043 | [0.0031, 0.0054] | **94.0% ± 2.7%** |
-| **20 篇 (全量封闭基准)** | 2953 字 | 23.1 | 10.0 | 0.963 | 94 块 | 0.0000 (定义基准) | [0.0000, 0.0000] | **100.0% (基准参照系)** |
-
-> **实验科学结论与局限性澄清**：
-> 1. 20 篇为封闭池内的定义基准（MSE=0 为参照系原点）；
-> 2. 50 组 Monte Carlo 子集重抽样证实 5 篇样本时 MSE 均值降至 0.0098，方差显著收缩，收敛度突破 91.0%；
-> 3. 从 5 篇增至 10 篇，MSE 绝对值仍下降了约 56.1% (从 0.0098 降至 0.0043)，在 $1 - \sqrt{\text{MSE}}$ 压缩尺度下变化约 3.0%；因此 5 篇严谨定位为“当前成本—特征误差权衡下的候选 operating point”；
-> 4. 结论严格建立在当前作者同类语料池上，跨作者泛化需后续多作者数据集验证。
-
----
-
-## 🚀 快速上手指南
-
-### 1. 环境准备
-项目基于 `uv` 进行快速可靠的依赖管理：
-```bash
+```powershell
 git clone https://github.com/Lk-1ndex/EchoStyle.git
 cd EchoStyle
-
 uv sync
-.\.venv\Scripts\activate
+Copy-Item config.example.yaml config.yaml
 ```
 
-项目中的 PDF 统一使用 MinerU 4 解析（不会污染项目虚拟环境）：
+macOS 或 Linux 使用：
+
 ```bash
+cp config.example.yaml config.yaml
+```
+
+### 2. 配置模型
+
+编辑本地 `config.yaml`。至少需要配置生成模型；建立 Dense 风格记忆时还应配置 Embedding 服务。
+
+```yaml
+llm:
+  api_key: "your-llm-api-key"
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-flash"
+  temperature: 0.7
+  max_tokens: 4096
+  thinking_effort: "auto"
+
+embedding:
+  api_key: "your-embedding-api-key"
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "Pro/BAAI/bge-m3"
+```
+
+模型接口需要兼容 OpenAI 风格的 Chat Completions 或 Embeddings 协议。完整配置项及默认值见 [`config.example.yaml`](config.example.yaml)。
+
+也可以使用环境变量覆盖部分敏感配置：
+
+| 变量 | 用途 |
+| --- | --- |
+| `OPENAI_API_KEY` | 生成模型 API Key |
+| `OPENAI_BASE_URL` | 生成模型 Base URL |
+| `EMBEDDING_API_KEY` | Embedding API Key |
+| `EMBEDDING_BASE_URL` | Embedding Base URL |
+| `EMBEDDING_MODEL` | Embedding 模型名 |
+| `EVALUATOR_API_KEY` | 独立评测模型 API Key |
+| `EVALUATOR_BASE_URL` | 独立评测模型 Base URL |
+| `EVALUATOR_MODEL` | 独立评测模型名 |
+
+`config.yaml` 已被 Git 忽略。不要把真实 API Key 写入 `config.example.yaml` 或提交到仓库。
+
+### 3. 安装 MinerU
+
+普通文本和 DOCX 不需要 MinerU。只有需要高质量解析 PDF 时才需要额外安装它。为避免依赖冲突，建议把 MinerU 作为独立的 uv tool 安装：
+
+```powershell
 uv tool install --python 3.12 "mineru>=4.0,<5"
 mineru-kit models download --tier basic --small-backend onnx
 ```
-`standard` 本地模型约 2 GB，最低需要 8 GB 内存；本项目在普通 CPU 机器上默认使用
-`basic`（模型约 0.8 GB，最低 2 GB 内存），需要更高版面质量时再将 `config.yaml` 中的
-`mineru_tier` 改为 `standard`，并执行：
-```bash
+
+`basic` 适合内存有限或主要使用 CPU 的机器。需要更高版面解析质量时，可以下载 `standard` 模型，并把 `config.yaml` 中的 `mineru_tier` 改为 `standard`：
+
+```powershell
 mineru-kit models download --tier standard --small-backend onnx --vlm-engine llama-cpp
 ```
 
-### 2. 配置文件
-编辑 `config.yaml` 填入你的大模型 API 密钥（兼容任何标准 OpenAI 协议，如 DeepSeek、OpenAI、Moonshot、Qwen 等）：
+默认 PDF 配置采用保守线程数，以降低峰值内存：
+
 ```yaml
-llm:
-  api_key: "sk-xxxxxx"
-  base_url: "https://api.deepseek.com"
-  model: "deepseek-flash"  # API ID，对应 DeepSeek-V4.1-Flash
-  max_tokens: 4096
-
-embedding:
-  api_key: "sk-xxxxxx"  # 硅基流动 API Key，与 DeepSeek Key 分开
-  base_url: "https://api.siliconflow.cn/v1"
-  model: "Pro/BAAI/bge-m3"
-
-agent:
-  max_reflections: 2       # Critic 触发反思重写的最大轮次
-  quality_threshold: 80.0  # 质检合格分阈值
-
 extractor:
-  pdf_engine: "mineru"                  # PDF 统一走 MinerU；失败时自动回退 MarkItDown
+  pdf_engine: "mineru"
   mineru_tier: "basic"
-  mineru_timeout: 900                    # 单个 PDF 最大解析秒数
-  mineru_intra_op_num_threads: 2         # 保守线程上限，降低峰值内存
+  mineru_timeout: 900
+  mineru_intra_op_num_threads: 2
   mineru_inter_op_num_threads: 1
   mineru_pdf_render_threads: 1
   mineru_malloc_trim: true
 ```
 
----
+如果 MinerU 命令不可用、解析超时或没有产生有效 Markdown，系统会记录原因并回退到 MarkItDown。
 
-## 🖥️ 运行方式
+### 4. 启动 Web 工作台
 
-### 方式一：运行科学评测与基准实验套件 (CLI Benchmark Suite)
-```bash
-# 1. 运行七组严格单变量消融实验 (A0/A1/B/C1a/C1b/C2/D 单变量隔离)
-python main.py benchmark --ablation
-
-# 2. 运行 20 篇样本规模渐近收敛实验 (验证 MSE 误差曲线与 5 篇黄金拐点)
-python main.py benchmark --scaling
-
-# 3. 运行规范化双盲评测 (输出加权胜率与 95% Wilson Score CI)
-python main.py benchmark --blind
-
-# 4. 运行系统失败案例与边界深度剖析 (跨领域冲突 / 冷启动退化 / 过度自审平庸化)
-python main.py benchmark --failure
-
-# 5. 运行完整 A/B 对照实验
-python main.py benchmark --ab
+```powershell
+uv run streamlit run src/web/app.py
 ```
 
-### 方式二：启动对话式 Web 工作台
-```bash
-streamlit run src/web/app.py
-```
-
-在聊天输入框中直接附加 Word、PDF、Markdown 或文本文件，然后用自然语言提出任务。`ConversationAgent` 会通过结构化决策选择文档问答、文风建模、画像写作或稿件修改；原有 Coordinator、Extractor、Analyst、Writer、Critic 与 FSM 质量闭环继续作为受控工具执行。微信公众号文章链接也可直接粘贴到对话中。
-
-示例：
+浏览器打开 `http://127.0.0.1:8501`。在输入框中添加文件，然后直接描述任务，例如：
 
 - `总结这两篇论文的核心结论，并标出来源。`
 - `分析这些文章的文风，建立“技术评论”画像。`
-- `按照这些文件的风格，写一篇 1500 字的中文文章。`
+- `参考上传资料，并使用当前画像写一篇 1500 字的中文文章。`
 - `把上一稿第二段改得更通俗，其他部分保持不变。`
 
-聊天记录和已解析附件目前属于当前 Streamlit 会话；点击“新建对话”或重启服务后会清空。已经建立的完整文风画像与 Style Memory 会继续写入本地持久化文件并在重启后恢复。
+## 支持的输入
 
-#### 上下文与自动压缩
+| 输入 | 处理方式 |
+| --- | --- |
+| PDF | MinerU 优先，MarkItDown 故障回退 |
+| DOCX | MarkItDown 提取并清洗 |
+| Markdown / TXT | 直接读取并清洗 |
+| 微信公众号文章 | 从 `mp.weixin.qq.com` 链接提取正文 |
 
-每次发送消息前，系统会按实际分词结果估算历史、附件和文风画像占用的 Token。当有效上下文达到应用软上限的 75%（默认软上限 32K，通常约 24K 时触发），会自动压缩较早的对话，不需要手动点击按钮。最近 6 条消息保持原文，其余历史由摘要模型压缩为不超过约 1,200 Token 的事实摘要，并直接传给路由、问答和写作链路。
+旧版 `.doc` 文件目前不受支持，请先转换为 `.docx`。
 
-压缩不是无校验地“让模型自由总结”：用户消息中的目标、硬性约束、主题、格式和附件名会额外以原文锚点保留；摘要模型失败或没有 API Key 时会使用确定性的本地回退摘要。每次压缩都会记录方法、保留消息数和锚点覆盖率，输入框会显示 `Auto · anchors xx%`。这不能在理论上保证摘要与原文语义绝对等价，但能把关键约束从抽象摘要中独立保护出来，并在摘要异常时可观测、可回退。
+## 系统架构
 
-### 方式三：CLI 命令行生产管道
-```bash
-# 1. 智能感知并提取文档
-python main.py extract -s "https://mp.weixin.qq.com/s/xxxxxx" -o "sample.md"
+EchoStyle 是多智能体系统，但不是让多个 Agent 自由讨论。`ConversationAgent` 负责理解用户意图，`CoordinatorAgent` 通过工具注册表和有限状态机执行受控工作流。
 
-# 2. 深度建模与记忆向量入库
-python main.py distill -i "sample1.md" "sample2.md" -n "独立思考风"
-
-# 3. 驱动 Coordinator 协作创作并输出评测报告
-python main.py write -p "profiles/独立思考风_deep_profile.json" -t "为什么真挚的文风在当下更稀缺？" -o "final_article.md"
+```mermaid
+flowchart LR
+    U[Web UI / CLI] --> C[ConversationAgent]
+    C --> O[CoordinatorAgent]
+    O --> E[ExtractorAgent]
+    O --> A[AnalystAgent]
+    O --> W[WriterAgent]
+    O --> R[CriticAgent]
+    A --> P[(Style Profiles)]
+    A --> M[(Style Memory)]
+    P --> W
+    M --> W
+    W --> R
+    R -->|Revise or rollback| W
+    R --> F[Final article]
 ```
 
-新建模的完整 `DeepStyleProfile` 会保存到 `profiles/deep_style_profiles_v2.json`，Web UI 重启后自动恢复最后激活的档案，也可在侧边栏切换历史档案。向量切片按 `profile_id` 隔离，默认记忆库为 `profiles/style_memory_v2.json`；旧 `profiles/style_memory.json` 原样保留，不自动读取、迁移或删除。缺少 ID 的旧档案仍可解析，但写作与召回前必须重新运行 `distill` 建模。LLM 裁判不可用或返回无效评分时，写作会报错终止，不会用默认分生成报告。
+| 组件 | 职责 |
+| --- | --- |
+| `ConversationAgent` | 路由聊天、问答、建模、写作和修改意图 |
+| `CoordinatorAgent` | 调度工具、维护 FSM、管理检查点与反思轮次 |
+| `ExtractorAgent` | 识别输入类型并提取、清洗正文 |
+| `AnalystAgent` | 计算语言学指标、生成画像并写入风格记忆 |
+| `WriterAgent` | 组合画像、检索片段和任务约束生成文章 |
+| `CriticAgent` | 评价草稿并返回接受、修改或重写决策 |
 
----
+## 数据与上下文
 
-## 🧪 自动化测试验证与持续集成 (CI)
+### 持久化范围
 
-系统包含覆盖有限状态机、快照回滚重试控制、Fail-Closed 向量与评测防降级、篇章感知过滤、清洗管道、客观语言学特征计算、条件盲审及动态 Token 预算的完整测试套件：
-```bash
-uv run pytest
+| 数据 | 位置 | 重启后保留 |
+| --- | --- | :---: |
+| 完整文风画像及当前激活项 | `profiles/deep_style_profiles_v2.json` | 是 |
+| 风格记忆切片及向量 | `profiles/style_memory_v2.json` | 是 |
+| 当前聊天记录 | Streamlit Session State | 否 |
+| 当前对话上传的文件 | Streamlit Session State | 否 |
+| 自动压缩摘要 | Streamlit Session State | 否 |
+
+画像和记忆按 `profile_id` 隔离。旧版、缺少 `profile_id` 的画像不能直接用于写作，需要重新执行建模。
+
+### 自动上下文压缩
+
+系统会在每次请求前估算历史消息、文档、画像和摘要的 Token 占用：
+
+- 应用软上限默认为 32K Token，同时受实际模型上下文窗口和输出预算限制。
+- 有效上下文达到软上限的 75% 后自动压缩。
+- 最近 6 条消息保留原文，更早的消息增量合并到摘要。
+- 用户目标、硬性约束、主题、格式等内容会作为原文锚点额外保留。
+- 摘要模型不可用时使用确定性的本地回退方案。
+
+压缩能够显著延长连续写作会话，但不能保证摘要与完整原文绝对等价。重要事实仍应以已上传资料或原文为准。
+
+## CLI 使用
+
+### 提取文档
+
+```powershell
+uv run python main.py extract -s "article.pdf" -o "article.md"
 ```
-测试结果以 `uv run pytest` 的实际输出为准；真实外连网络测试默认跳过。
 
-- **持续集成工作流模板 (CI Workflow Template)**：自动化 CI 工作流模板维护于 [`ci/pytest.yml`](ci/pytest.yml)。
-  > *注：上述测试通过数据为本地完整测试套件运行结果。若需在 GitHub 远程仓库启用 Actions 持续集成，可将 `ci/pytest.yml` 复制部署至 `.github/workflows/pytest.yml`（若使用 PAT 推送时遇到 `refusing to allow a Personal Access Token to create or update workflow without workflow scope` 权限拦截，需在 GitHub 开发者设置中为 Token 开启 `workflow` 作用域，或通过 GitHub Web 页面提交）。*
+### 建立文风画像
 
-
----
-
-## 📂 项目模块结构
+```powershell
+uv run python main.py distill -i "sample-1.md" "sample-2.docx" -n "技术评论"
 ```
+
+### 使用画像写作
+
+```powershell
+uv run python main.py write `
+  -p "profiles/技术评论_deep_profile.json" `
+  -t "为什么复杂系统需要可观测性？" `
+  -k "从工程协作与故障恢复两个角度展开" `
+  -w 1500 `
+  -o "article.md"
+```
+
+上面的示例使用 PowerShell 续行语法；在其他 Shell 中可以把参数写在同一行。
+
+## 测试
+
+```powershell
+uv run pytest -q
+```
+
+请使用 `uv run`，避免误用缺少项目依赖的系统 Python。真实网络和外部模型测试默认不会作为普通单元测试执行。
+
+仓库中的 [`ci/pytest.yml`](ci/pytest.yml) 是 GitHub Actions 工作流模板。若要启用远程 CI，需要将它放到 `.github/workflows/pytest.yml`。
+
+## 实验与评测
+
+```powershell
+# 七条件消融实验
+uv run python main.py benchmark --ablation
+
+# 样本规模与收敛实验
+uv run python main.py benchmark --scaling
+
+# 成对双盲评测
+uv run python main.py benchmark --blind
+
+# 失败案例分析
+uv run python main.py benchmark --failure
+
+# A/B 对照实验
+uv run python main.py benchmark --ab
+```
+
+消融和双盲流程支持 `--simulate`，用于离线验证实验管道。模拟数据不是模型真实性能结果；正式在线实验需要有效 API，并在裁判调用失败或返回无效结果时终止，避免静默混入本地规则评分。
+
+## 常见问题
+
+### MinerU 出现内存分配错误
+
+优先使用 `basic` 模型和默认保守线程数。EchoStyle 会逐个文件解析，并以 1 MB 分块写入临时文件，避免额外保留整批上传内容；但 MinerU 自身仍会占用模型和页面渲染内存。超大 PDF 建议单独上传，并关闭其他高内存任务。
+
+### Embedding 请求失败
+
+确认 `embedding.api_key`、`embedding.base_url` 和 `embedding.model` 属于同一个服务商。普通检索允许降级到 BM25；严格消融实验会直接失败，以保证实验条件没有被悄悄改变。
+
+### 依赖已安装但命令仍然报缺包
+
+使用 `uv run ...` 或先激活项目的 `.venv`。直接运行系统级 `python`、`pytest` 或 `streamlit` 可能使用另一个环境。
+
+## 目录结构
+
+```text
 EchoStyle/
 ├── src/
-│   ├── core/          # 核心抽象 (DeepStyleProfile, FSM 状态机, 启发式 Token 预算 ModelProvider)
-│   ├── extractors/    # 微信/Word/PDF 提取、版面复杂度感知 (inspector) 与文本净化 (sanitizer)
-│   ├── analyzer/      # 统计语言学特征计算 (stylometrics, STTR, 标点熵) 与文风逆向蒸馏
-│   ├── memory/        # 长期风格记忆库 (Style-Aware RAG, 倒数排名融合 RRF 混合检索)
-│   ├── agents/        # 对话 Supervisor 与严格 FSM 智能体体系 (Conversation, Coordinator, Writer, Critic, Extractor, Analyst)
-│   ├── evaluation/    # 模块化 EchoEval 评测体系
-│   │   ├── lexical_metrics.py     # 词汇级指标 (STTR, 套话惩罚)
-│   │   ├── rhythm_metrics.py      # 节奏与韵律偏离度 (Rhythm Deviation)
-│   │   ├── discourse_metrics.py   # 篇章推进逻辑与人工黄金标注基准 (Gold Benchmark)
-│   │   ├── composite_eval.py      # 统一优化目标函数 (EchoScore)
-│   │   ├── judge.py               # 多角色评估员面板与独立条件盲审裁决 (Holdout Evaluator)
-│   │   └── metrics.py             # 兼容统一门面 (Facade)
-│   └── web/           # Streamlit 对话式工作台
-├── experiments/       # 科学实验与评测基准套件
-│   ├── ablation_study.py    # 7 组严格单变量消融实验 (7-Condition Matrix)
-│   ├── scaling_study.py     # 20 篇样本规模渐近收敛实验 (MSE Curve)
-│   ├── failure_analysis.py  # 失败案例与系统边界深度剖析
-│   ├── blind_benchmark.py   # 规范化成对盲评基准套件
-│   └── ab_benchmark.py      # 三方 A/B 对照基准
-├── tests/             # 单元与集成测试套件
-├── profiles/          # 文风档案、记忆切片与 Benchmark 评测报告 (Markdown / JSON)
-├── benchmark.py       # 基准测试执行脚本
-├── main.py            # CLI 命令行调度入口
-
-├── pyproject.toml     # 项目依赖与构建元数据
-└── config.yaml        # 运行时系统配置 (已纳入 .gitignore 安全隔离)
+│   ├── agents/       # 对话路由、调度、提取、分析、写作与审校 Agent
+│   ├── analyzer/     # 统计语言学与文风蒸馏
+│   ├── core/         # 配置、模型接口、数据模型与上下文管理
+│   ├── evaluation/   # 文风、节奏、篇章与盲评指标
+│   ├── extractors/   # PDF、DOCX、文本和微信文章解析
+│   ├── generator/    # 写作提示与合成逻辑
+│   ├── memory/       # 画像存储、向量库与 RRF 检索
+│   └── web/          # Streamlit 工作台与样式资源
+├── experiments/      # 消融、规模、盲评、A/B 与失败分析
+├── tests/            # 单元和集成测试
+├── ci/               # CI 工作流模板
+├── main.py           # CLI 入口
+├── config.example.yaml
+└── pyproject.toml
 ```
-
----
-
-## 📄 License
-MIT License.
