@@ -11,7 +11,7 @@ class ModelProvider:
     """
     生产级模型抽象层 (Production Model Layer)：
     1. 集成 tiktoken 工业标准 BPE 分词器，进行精准 Token 计费与截断；
-    2. 实现确定性的 Token 分级预算配比策略 (20% 角色 / 25% 风格指纹 / 30% 记忆范例 / 15% 任务要点 / 10% 审校历史)；
+    2. 实现任务感知的 Token 分级预算，并将未使用配额回收给当前任务；
     3. 指数退避重试 (Exponential Backoff) 与主备模型降级。
     """
 
@@ -163,7 +163,6 @@ class ModelProvider:
         quota_persona = int(available_tokens * r_persona)
         quota_style = int(available_tokens * r_style)
         quota_memory = int(available_tokens * r_memory)
-        quota_task = int(available_tokens * r_task)
         quota_critique = int(available_tokens * r_critique)
 
         # 1. 裁剪并组装 System 部分
@@ -180,11 +179,19 @@ class ModelProvider:
         if safe_memory.strip():
             system_prompt += f"\n\n## 风格感知检索召回的历史范例\n{safe_memory}"
 
-        # 3. 裁剪并组装 User Task 与 Critique 部分
-        safe_task = self.truncate_tokens(user_task, quota_task)
+        # 3. 先计算辅助上下文的实际占用，再把未使用配额全部回收给当前任务。
+        # 风格画像和 few-shot 通常远小于各自上限；如果仍固定给任务 15%，
+        # 1M 模型也只能收到约 150K 的资料，模型窗口会被无谓浪费。
+        safe_critique = self.truncate_tokens(critique_feedback, quota_critique) if critique_feedback else ""
+        reserved_tokens = sum(
+            self.count_tokens(section)
+            for section in (safe_persona, safe_style, safe_memory, safe_critique)
+        )
+        prompt_overhead = 256
+        task_budget = max(1, available_tokens - reserved_tokens - prompt_overhead)
+        safe_task = self.truncate_tokens(user_task, task_budget)
         user_prompt = safe_task
         if critique_feedback:
-            safe_critique = self.truncate_tokens(critique_feedback, quota_critique)
             user_prompt += f"\n\n## 上一轮总编辑审校批注（重点反思修正）\n{safe_critique}"
 
         return system_prompt, user_prompt
@@ -220,6 +227,13 @@ class ModelProvider:
                 return cls.MODEL_CONTEXT_WINDOWS[key]
         return cls.MODEL_CONTEXT_WINDOWS["default"]
 
+    def effective_context_window(self) -> int:
+        """Use an explicit provider/model override before the alias catalog."""
+        configured = getattr(self.llm_config, "context_window", None)
+        if configured is not None:
+            return int(configured)
+        return self.context_window_for_model(self.llm_config.model)
+
     @classmethod
     def max_output_for_model(cls, model: Optional[str] = None) -> Optional[int]:
         model_name = (model or "").lower()
@@ -230,7 +244,7 @@ class ModelProvider:
 
     def input_token_budget(self, safety_margin: int = 1000) -> int:
         """Maximum prompt tokens reserved after the configured output cap."""
-        window = self.context_window_for_model(self.llm_config.model)
+        window = self.effective_context_window()
         return max(3000, window - self.request_output_cap() - safety_margin)
 
     def request_output_cap(self, requested: Optional[int] = None) -> int:

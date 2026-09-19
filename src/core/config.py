@@ -1,7 +1,7 @@
 import os
 import yaml
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -11,6 +11,11 @@ class LLMConfig(BaseModel):
     model: str = Field(default="deepseek-flash", description="模型名称")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=4096)
+    context_window: Optional[int] = Field(
+        default=None,
+        ge=8192,
+        description="模型上下文窗口；留空时根据模型名自动识别",
+    )
     thinking_effort: Literal["auto", "off", "low", "high", "max"] = Field(
         default="auto", description="DeepSeek 思考强度；auto 使用模型默认设置"
     )
@@ -61,6 +66,7 @@ class EvaluatorConfig(BaseModel):
             model=self.model.strip() if self.model and self.model.strip() else fallback.model,
             temperature=self.temperature,
             max_tokens=self.max_tokens or fallback.max_tokens,
+            context_window=fallback.context_window,
             thinking_effort=fallback.thinking_effort,
         )
 

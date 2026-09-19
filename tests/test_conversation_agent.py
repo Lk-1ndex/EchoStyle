@@ -72,6 +72,42 @@ def test_document_question_routes_and_uses_grounded_context():
     assert "不可信数据" in answer_call.kwargs["system_prompt"]
 
 
+def test_chat_passes_more_than_six_recent_messages_when_the_model_has_room():
+    provider = MagicMock()
+    provider.input_token_budget.return_value = 100_000
+    provider.count_tokens.side_effect = lambda text: len(text)
+    provider.truncate_tokens.side_effect = lambda text, max_tokens: text[:max_tokens]
+    provider.chat_completion.side_effect = [route_payload("chat"), "继续回答"]
+    agent = ConversationAgent(AppConfig(), MagicMock(), model_provider=provider)
+    history = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"history-turn-{index}"}
+        for index in range(20)
+    ]
+
+    agent.respond("继续", [], history=history)
+
+    answer_prompt = provider.chat_completion.call_args_list[1].kwargs["user_prompt"]
+    assert "history-turn-0" in answer_prompt
+    assert "history-turn-19" in answer_prompt
+
+
+def test_document_context_can_expand_beyond_the_old_character_cap():
+    provider = MagicMock()
+    provider.count_tokens.side_effect = lambda text: len(text)
+    provider.truncate_tokens.side_effect = lambda text, max_tokens: text[:max_tokens]
+    agent = ConversationAgent(AppConfig(), MagicMock(), model_provider=provider)
+    content = ("long-document-section " * 3_000) + "TAIL_SENTINEL"
+
+    context = agent._build_document_context(
+        [{"title": "长文档", "content": content}],
+        "请查找文档内容",
+        max_tokens=100_000,
+    )
+
+    assert len(context) > 48_000
+    assert "TAIL_SENTINEL" in context
+
+
 def test_build_style_calls_existing_analyst_workflow():
     provider = MagicMock()
     provider.chat_completion.return_value = route_payload(

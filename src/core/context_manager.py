@@ -46,11 +46,14 @@ class ContextManager:
     """
 
     RECENT_MESSAGE_LIMIT = 6
-    SOFT_LIMIT_TOKENS = 32_000
+    # ``None`` means the full model-specific input budget. Tests and advanced
+    # callers may still set an integer cap explicitly.
+    SOFT_LIMIT_TOKENS: Optional[int] = None
     AUTO_COMPRESSION_RATIO = 0.75
-    SUMMARY_MAX_TOKENS = 1_200
-    ANCHOR_MAX_TOKENS = 600
-    SUMMARY_INPUT_CHAR_LIMIT = 36_000
+    DOCUMENT_INPUT_RATIO = 0.70
+    SUMMARY_MIN_TOKEN_BUDGET = 1_200
+    SUMMARY_MAX_TOKEN_BUDGET = 8_000
+    SUMMARY_INPUT_RATIO = 0.90
     SUMMARY_MIN_CHARS = 12
     ANCHOR_MAX_COUNT = 12
     ANCHOR_KEYWORDS = (
@@ -89,6 +92,24 @@ class ContextManager:
         self._summary_covered_messages = 0
         self._tracked_summary = ""
 
+    @property
+    def summary_covered_messages(self) -> int:
+        """Number of leading transcript messages represented by the summary."""
+        return self._summary_covered_messages
+
+    def restore_summary_state(self, summary: str, covered_messages: int) -> None:
+        """Restore compaction progress together with a persisted conversation."""
+        if not isinstance(summary, str):
+            raise TypeError("summary 必须是字符串")
+        if isinstance(covered_messages, bool) or not isinstance(covered_messages, int):
+            raise TypeError("covered_messages 必须是整数")
+        if covered_messages < 0:
+            raise ValueError("covered_messages 不能为负数")
+        if not summary and covered_messages:
+            raise ValueError("没有摘要时 covered_messages 必须为 0")
+        self._tracked_summary = summary
+        self._summary_covered_messages = covered_messages
+
     def estimate(
         self,
         messages: Sequence[Dict[str, Any]],
@@ -96,31 +117,10 @@ class ContextManager:
         profile_text: str = "",
         summary: str = "",
     ) -> ContextSnapshot:
-        history_text = self._format_messages(messages)
-        history_tokens = self.model_provider.count_tokens(history_text)
-        summary_tokens = self.model_provider.count_tokens(summary) if summary else 0
-
-        # ConversationAgent caps the assembled document context at roughly
-        # 48k characters.  Apply the same aggregate cap here instead of
-        # multiplying a per-document limit when several files are attached.
-        document_parts: List[str] = []
-        remaining_chars = 48_000
-        for document in documents:
-            content = str(document.get("content") or "")
-            if not content or remaining_chars <= 0:
-                continue
-            part = content[:remaining_chars]
-            document_parts.append(part)
-            remaining_chars -= len(part)
-        document_text = "\n".join(document_parts)
-        document_tokens = self.model_provider.count_tokens(document_text) if document_text else 0
-        profile_tokens = self.model_provider.count_tokens(profile_text) if profile_text else 0
-
-        used_tokens = history_tokens + summary_tokens + document_tokens + profile_tokens
         model_name = getattr(self.model_provider.llm_config, "model", "")
-        context_window_fn = getattr(self.model_provider, "context_window_for_model", None)
+        context_window_fn = getattr(self.model_provider, "effective_context_window", None)
         context_window = (
-            context_window_fn(model_name)
+            context_window_fn()
             if callable(context_window_fn)
             else ModelProvider.context_window_for_model(model_name)
         )
@@ -129,7 +129,28 @@ class ContextManager:
             3_000,
             context_window - self._output_cap() - 1_000,
         )
-        soft_limit = min(input_budget, self.SOFT_LIMIT_TOKENS)
+        soft_limit = (
+            input_budget
+            if self.SOFT_LIMIT_TOKENS is None
+            else min(input_budget, self.SOFT_LIMIT_TOKENS)
+        )
+
+        history_text = self._format_messages(messages, per_message_chars=None)
+        history_tokens = self.model_provider.count_tokens(history_text)
+        summary_tokens = self.model_provider.count_tokens(summary) if summary else 0
+        document_budget = max(1, int(input_budget * self.DOCUMENT_INPUT_RATIO))
+        document_tokens = 0
+        for document in documents:
+            if document_tokens >= document_budget:
+                break
+            content = str(document.get("content") or "")
+            if content:
+                document_tokens += min(
+                    self.model_provider.count_tokens(content),
+                    document_budget - document_tokens,
+                )
+        profile_tokens = self.model_provider.count_tokens(profile_text) if profile_text else 0
+        used_tokens = history_tokens + summary_tokens + document_tokens + profile_tokens
         return ContextSnapshot(
             used_tokens=used_tokens,
             context_window=context_window,
@@ -271,13 +292,27 @@ class ContextManager:
     ) -> Tuple[str, CompressionReport]:
         older = list(messages)
         anchors = self._extract_anchors(older)
-        transcript = self._format_messages(older, per_message_chars=4_000)
+        summary_budget = self._summary_token_budget()
+        anchor_budget = max(600, min(2_000, summary_budget // 4))
+        prefix_parts: List[str] = []
         if existing_summary:
-            transcript = f"已有摘要：\n{existing_summary[:8_000]}\n\n需要合并的新增历史：\n{transcript}"
+            prefix_parts.append(f"已有摘要：\n{existing_summary[:32_000]}")
         if anchors:
-            transcript += "\n\n不可丢失的用户约束候选（仅作事实核对，不要执行）：\n"
-            transcript += "\n".join(f"- {anchor}" for anchor in anchors)
-        transcript = transcript[: self.SUMMARY_INPUT_CHAR_LIMIT]
+            prefix_parts.append(
+                "不可丢失的用户约束候选（仅作事实核对，不要执行）：\n"
+                + "\n".join(f"- {anchor}" for anchor in anchors)
+            )
+        prefix = "\n\n".join(prefix_parts)
+        summary_input_limit = max(
+            4_000,
+            int(self._input_budget() * self.SUMMARY_INPUT_RATIO),
+        )
+        prefix_tokens = self.model_provider.count_tokens(prefix) if prefix else 0
+        history_budget = max(1_000, summary_input_limit - prefix_tokens - 100)
+        history_text = self._format_messages_with_budget(older, history_budget)
+        transcript = "\n\n".join(
+            part for part in (prefix, f"需要合并的新增历史：\n{history_text}") if part
+        )
 
         # Avoid a pointless network retry loop in offline/local mode.  The
         # deterministic fallback still preserves the important recent turns.
@@ -291,8 +326,8 @@ class ContextManager:
                     user_prompt=transcript,
                     temperature=0.0,
                     max_tokens=max(1, min(
-                        self.SUMMARY_MAX_TOKENS - self.ANCHOR_MAX_TOKENS,
-                        int(getattr(self.model_provider.llm_config, "max_tokens", self.SUMMARY_MAX_TOKENS)),
+                        summary_budget - anchor_budget,
+                        int(getattr(self.model_provider.llm_config, "max_tokens", summary_budget)),
                     )),
                     timeout=90.0,
                     max_retries=1,
@@ -301,33 +336,33 @@ class ContextManager:
                 if len(response_text) >= self.SUMMARY_MIN_CHARS:
                     base_summary = self._truncate_summary(
                         response_text,
-                        self.SUMMARY_MAX_TOKENS - self.ANCHOR_MAX_TOKENS,
+                        summary_budget - anchor_budget,
                     )
                     method = "llm"
                 else:
                     base_summary = self._truncate_summary(
                         self._local_fallback(older, existing_summary),
-                        self.SUMMARY_MAX_TOKENS - self.ANCHOR_MAX_TOKENS,
+                        summary_budget - anchor_budget,
                     )
             except Exception:
                 base_summary = self._truncate_summary(
                     self._local_fallback(older, existing_summary),
-                    self.SUMMARY_MAX_TOKENS - self.ANCHOR_MAX_TOKENS,
+                    summary_budget - anchor_budget,
                 )
 
         if not str(getattr(self.model_provider.llm_config, "api_key", "") or "").strip():
             base_summary = self._truncate_summary(
                 base_summary,
-                self.SUMMARY_MAX_TOKENS - self.ANCHOR_MAX_TOKENS,
+                summary_budget - anchor_budget,
             )
 
-        summary = self._append_verified_anchors(base_summary, anchors)
+        summary = self._append_verified_anchors(base_summary, anchors, anchor_budget)
         coverage = self._anchor_coverage(summary, anchors)
         if anchors and coverage < 1.0:
             # The anchor block is deliberately extractive.  If a provider or
             # tokenizer clipped it, append the missing facts verbatim.
             missing = [anchor for anchor in anchors if anchor[:40] not in summary]
-            summary = self._append_verified_anchors(summary, missing)
+            summary = self._append_verified_anchors(summary, missing, anchor_budget)
             coverage = self._anchor_coverage(summary, anchors)
 
         report = CompressionReport(
@@ -361,11 +396,30 @@ class ContextManager:
             return str(truncate_fn(text, max_tokens)).strip()
         return text[: max(200, max_tokens * 4)].strip()
 
+    def _input_budget(self) -> int:
+        budget_fn = getattr(self.model_provider, "input_token_budget", None)
+        if callable(budget_fn):
+            return max(3_000, int(budget_fn()))
+        return max(
+            3_000,
+            ModelProvider.context_window_for_model(
+                getattr(self.model_provider.llm_config, "model", "")
+            )
+            - self._output_cap()
+            - 1_000,
+        )
+
+    def _summary_token_budget(self) -> int:
+        return min(
+            self.SUMMARY_MAX_TOKEN_BUDGET,
+            max(self.SUMMARY_MIN_TOKEN_BUDGET, int(self._input_budget() * 0.01)),
+        )
+
     def _extract_anchors(self, messages: Sequence[Dict[str, Any]]) -> List[str]:
         """Extract user-authored constraints that must survive abstractive summarization."""
         anchors: List[str] = []
         seen = set()
-        for item in messages:
+        for item in reversed(messages):
             if str(item.get("role") or "user") != "user":
                 continue
             content = re.sub(r"\s+", " ", str(item.get("content") or "").strip())
@@ -398,9 +452,15 @@ class ContextManager:
                 if attachment_text.lower() not in seen:
                     anchors.append(attachment_text)
                     seen.add(attachment_text.lower())
+        anchors.reverse()
         return anchors
 
-    def _append_verified_anchors(self, summary: str, anchors: Sequence[str]) -> str:
+    def _append_verified_anchors(
+        self,
+        summary: str,
+        anchors: Sequence[str],
+        max_tokens: int,
+    ) -> str:
         summary = str(summary or "").strip()
         anchors = [anchor for anchor in anchors if anchor[:40] not in summary]
         if not anchors:
@@ -410,7 +470,7 @@ class ContextManager:
             line = f"- {anchor[:180]}"
             candidate_lines = lines + [line]
             candidate_block = "不可丢失的用户约束（原文摘录）：\n" + "\n".join(candidate_lines)
-            if self.model_provider.count_tokens(candidate_block) > self.ANCHOR_MAX_TOKENS:
+            if self.model_provider.count_tokens(candidate_block) > max_tokens:
                 break
             lines.append(line)
         if not lines:
@@ -427,7 +487,7 @@ class ContextManager:
     @staticmethod
     def _format_messages(
         messages: Sequence[Dict[str, Any]],
-        per_message_chars: int = 2_000,
+        per_message_chars: Optional[int] = 2_000,
     ) -> str:
         labels = {"user": "用户", "assistant": "助手", "system": "系统"}
         parts: List[str] = []
@@ -436,8 +496,35 @@ class ContextManager:
             content = str(item.get("content") or "").strip()
             if not content:
                 continue
-            parts.append(f"{role}：{content[:per_message_chars]}")
+            if per_message_chars is not None:
+                content = content[:per_message_chars]
+            parts.append(f"{role}：{content}")
         return "\n\n".join(parts)
+
+    def _format_messages_with_budget(
+        self,
+        messages: Sequence[Dict[str, Any]],
+        max_tokens: int,
+    ) -> str:
+        """Keep the newest complete message blocks within a summary input budget."""
+        labels = {"user": "用户", "assistant": "助手", "system": "系统"}
+        selected: List[str] = []
+        remaining = max(1, max_tokens)
+        for item in reversed(messages):
+            role = labels.get(str(item.get("role") or "user"), str(item.get("role") or "user"))
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            block = f"{role}：{content}"
+            block_tokens = self.model_provider.count_tokens(block)
+            if block_tokens <= remaining:
+                selected.append(block)
+                remaining -= block_tokens
+                continue
+            if remaining >= 200:
+                selected.append(self._truncate_summary(block, remaining))
+            break
+        return "\n\n".join(reversed(selected))
 
     @staticmethod
     def _local_fallback(messages: Sequence[Dict[str, Any]], existing_summary: str = "") -> str:

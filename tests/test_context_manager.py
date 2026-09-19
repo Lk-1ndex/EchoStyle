@@ -46,7 +46,7 @@ def test_estimate_uses_configured_model_window_and_soft_limit():
 
     assert snapshot.context_window == 1_000_000
     assert snapshot.input_budget == 994_904
-    assert snapshot.soft_limit == 32_000
+    assert snapshot.soft_limit == 994_904
     assert snapshot.output_cap == 4_096
     assert snapshot.used_tokens > 0
 
@@ -114,6 +114,35 @@ def test_prepare_history_only_merges_messages_not_already_in_summary():
     assert "turn-5" in delta_prompt
     assert "turn-0" not in delta_prompt
     assert manager.last_report.source_messages == 2
+
+
+def test_restored_summary_progress_keeps_unsummarized_messages_after_restart():
+    first_provider = FakeProvider(token_scale=1)
+    first_manager = ContextManager(first_provider)
+    first_manager.SOFT_LIMIT_TOKENS = 10_000
+    transcript = messages(10, width=4_000)
+
+    _, summary, _, compressed = first_manager.prepare_history(transcript)
+    assert compressed
+    covered = first_manager.summary_covered_messages
+    assert covered == 4
+
+    second_provider = FakeProvider(token_scale=1)
+    restored_manager = ContextManager(second_provider)
+    restored_manager.SOFT_LIMIT_TOKENS = 10_000
+    restored_manager.restore_summary_state(summary, covered)
+    extended = transcript + [
+        {"role": "assistant", "content": "new assistant turn"},
+        {"role": "user", "content": "new user turn"},
+    ]
+
+    restored_manager.prepare_history(extended, summary=summary)
+
+    delta_prompt = second_provider.summary_prompts[-1].split("需要合并的新增历史：", 1)[1]
+    assert "turn-4" in delta_prompt
+    assert "turn-5" in delta_prompt
+    assert "turn-0" not in delta_prompt
+    assert restored_manager.summary_covered_messages == 6
 
 
 def test_compress_falls_back_locally_when_summary_model_fails():

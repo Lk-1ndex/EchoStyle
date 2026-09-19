@@ -169,9 +169,11 @@ flowchart LR
 | --- | --- | :---: |
 | 完整文风画像及当前激活项 | `profiles/deep_style_profiles_v2.json` | 是 |
 | 风格记忆切片及向量 | `profiles/style_memory_v2.json` | 是 |
-| 当前聊天记录 | Streamlit Session State | 否 |
-| 当前对话上传的文件 | Streamlit Session State | 否 |
-| 自动压缩摘要 | Streamlit Session State | 否 |
+| 当前聊天记录与最后一篇稿件 | `profiles/conversation_state_v1.json` | 是 |
+| 当前对话文件的解析正文与元数据 | `profiles/conversation_state_v1.json` | 是 |
+| 自动压缩摘要、报告与覆盖游标 | `profiles/conversation_state_v1.json` | 是 |
+
+对话快照采用文件锁和原子替换写入。系统保存附件解析后的正文与元数据，不额外复制原始 PDF 或 DOCX 二进制；重启后可以继续问答和写作。点击“新建对话”会清空并覆盖当前会话快照。该文件包含本地聊天和文档正文，请勿提交或公开；现有 `.gitignore` 已忽略它。
 
 画像和记忆按 `profile_id` 隔离。旧版、缺少 `profile_id` 的画像不能直接用于写作，需要重新执行建模。
 
@@ -179,8 +181,10 @@ flowchart LR
 
 系统会在每次请求前估算历史消息、文档、画像和摘要的 Token 占用：
 
-- 应用软上限默认为 32K Token，同时受实际模型上下文窗口和输出预算限制。
-- 有效上下文达到软上限的 75% 后自动压缩。
+- 应用按当前模型动态确定上下文窗口；`deepseek-flash` / `DeepSeek-V4.1-Flash` 自动使用 1M Token，未知模型保守回退到 32K。
+- 实际输入预算会从总窗口中预留输出额度和 1,000 Token 安全余量。默认 4,096 Token 输出时，1M 模型可使用约 994.9K 输入。
+- 有效上下文达到输入预算的 75% 后自动压缩；文档、历史与写作任务也按该预算动态扩展，不再固定截断在 32K。
+- 使用代理或自定义模型名时，可通过 `llm.context_window` 显式填写服务商公布的窗口大小。
 - 最近 6 条消息保留原文，更早的消息增量合并到摘要。
 - 用户目标、硬性约束、主题、格式等内容会作为原文锚点额外保留。
 - 摘要模型不可用时使用确定性的本地回退方案。

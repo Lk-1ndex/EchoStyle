@@ -13,6 +13,7 @@ from src.core.config import AppConfig
 from src.extractors.inspector import DocumentInspector
 from src.extractors.wechat import WeChatExtractor
 from src.extractors.word import WordExtractor
+from src.memory.conversation_store import ConversationStore
 
 
 def test_word_extractor_reads_docx_with_installed_converter(tmp_path):
@@ -139,3 +140,50 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
     assert len(app.session_state["documents"]) == (0 if fails else 1)
     if not fails:
         assert app.session_state["documents"][0]["title"] == "sample"
+        persisted = ConversationStore(str(tmp_path / "profiles/conversation_state_v1.json")).load()
+        assert persisted is not None
+        assert persisted["documents"][0]["content"] == "Sample article body"
+        assert persisted["messages"][0]["attachments"] == ["sample.md"]
+
+
+def test_web_restores_persisted_conversation(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.chdir(tmp_path)
+    state = ConversationStore.empty_state()
+    state.update(
+        {
+            "messages": [
+                {"role": "user", "content": "保留这个问题", "attachments": ["paper.md"]},
+                {"role": "assistant", "content": "保留这个回答"},
+            ],
+            "documents": [
+                {
+                    "title": "paper",
+                    "content": "重启后仍可引用的正文",
+                    "document_id": "saved-hash",
+                    "engine_used": "plain_text",
+                    "char_count": 11,
+                }
+            ],
+            "document_hashes": ["saved-hash"],
+            "last_article": "保留的最后一稿",
+            "context_summary": "保留的自动摘要",
+            "summary_covered_messages": 1,
+            "context_compression_count": 1,
+            "context_notice": "已自动压缩较早的对话",
+            "context_report": {"verified": True, "anchor_coverage": 1.0},
+        }
+    )
+    ConversationStore("profiles/conversation_state_v1.json").save(state)
+    app_path = Path(__file__).resolve().parents[1] / "src/web/app.py"
+
+    with patch("src.core.config.load_config", return_value=AppConfig()):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    assert app.session_state["messages"] == state["messages"]
+    assert app.session_state["documents"] == state["documents"]
+    assert app.session_state["document_hashes"] == {"saved-hash"}
+    assert app.session_state["context_summary"] == "保留的自动摘要"
+    assert app.session_state["context_manager"].summary_covered_messages == 1

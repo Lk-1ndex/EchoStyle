@@ -15,6 +15,7 @@ from src.agents.conversation_agent import ConversationAgent, ConversationResult
 from src.agents.coordinator import CoordinatorAgent
 from src.core.config import load_config
 from src.core.context_manager import ContextManager, ContextSnapshot
+from src.memory.conversation_store import ConversationStore
 from src.memory.memory_manager import MemoryManager
 from src.memory.profile_store import ProfileStore
 
@@ -159,10 +160,6 @@ def _render_thinking_effort_live_bridge() -> None:
     )
 
 
-def _initial_messages() -> List[Dict[str, Any]]:
-    return []
-
-
 def _format_token_count(value: int) -> str:
     """Format token counts compactly enough for the composer on mobile."""
     if value >= 1_000_000:
@@ -202,6 +199,7 @@ def _activate_profile(profile_id: str) -> None:
     st.session_state.deep_profile = selected_profile
     if profile_id != previous_profile_id:
         st.session_state.last_article = None
+        _persist_conversation()
 
 
 def _parse_chat_input(value: Any) -> Tuple[str, List[Any]]:
@@ -347,11 +345,107 @@ def _store_assistant_result(result: ConversationResult) -> Dict[str, Any]:
     }
 
 
+def _conversation_payload() -> Dict[str, Any]:
+    manager: ContextManager = st.session_state.context_manager
+    return {
+        "messages": list(st.session_state.messages),
+        "documents": list(st.session_state.documents),
+        "document_hashes": sorted(st.session_state.document_hashes),
+        "last_article": st.session_state.last_article,
+        "context_summary": st.session_state.context_summary,
+        "summary_covered_messages": manager.summary_covered_messages,
+        "context_compression_count": st.session_state.context_compression_count,
+        "context_notice": st.session_state.context_notice,
+        "context_report": st.session_state.context_report,
+    }
+
+
+def _persist_conversation() -> None:
+    if not st.session_state.get("_conversation_persistence_enabled", True):
+        return
+    try:
+        st.session_state.conversation_store.save(_conversation_payload())
+        st.session_state.conversation_persistence_error = ""
+    except Exception as exc:
+        st.session_state.conversation_persistence_error = str(exc)
+
+
+def _restore_conversation() -> None:
+    defaults = ConversationStore.empty_state()
+    snapshot = None
+    st.session_state._conversation_persistence_enabled = True
+    st.session_state.conversation_persistence_error = ""
+    try:
+        snapshot = st.session_state.conversation_store.load()
+    except Exception as exc:
+        # Preserve a damaged snapshot for manual recovery instead of
+        # overwriting it with an empty conversation on the next interaction.
+        st.session_state._conversation_persistence_enabled = False
+        st.session_state.conversation_persistence_error = str(exc)
+
+    source = snapshot or defaults
+    for key in (
+        "messages",
+        "documents",
+        "last_article",
+        "context_summary",
+        "context_compression_count",
+        "context_notice",
+        "context_report",
+    ):
+        if snapshot is not None or key not in st.session_state:
+            st.session_state[key] = source[key]
+
+    if snapshot is not None or "document_hashes" not in st.session_state:
+        hashes = set(source["document_hashes"])
+        hashes.update(
+            str(document.get("document_id"))
+            for document in st.session_state.documents
+            if document.get("document_id")
+        )
+        st.session_state.document_hashes = hashes
+
+    covered_messages = (
+        source["summary_covered_messages"]
+        if snapshot is not None
+        else st.session_state.context_manager.summary_covered_messages
+    )
+    st.session_state.context_manager.restore_summary_state(
+        st.session_state.context_summary,
+        covered_messages,
+    )
+    st.session_state._conversation_state_loaded = True
+    if snapshot is None and (
+        st.session_state.messages
+        or st.session_state.documents
+        or st.session_state.context_summary
+        or st.session_state.last_article
+    ):
+        _persist_conversation()
+
+
+def _reset_conversation() -> None:
+    defaults = ConversationStore.empty_state()
+    st.session_state.messages = defaults["messages"]
+    st.session_state.documents = defaults["documents"]
+    st.session_state.document_hashes = set()
+    st.session_state.last_article = defaults["last_article"]
+    st.session_state.context_summary = defaults["context_summary"]
+    st.session_state.context_compression_count = defaults["context_compression_count"]
+    st.session_state.context_notice = defaults["context_notice"]
+    st.session_state.context_report = defaults["context_report"]
+    st.session_state.context_manager.restore_summary_state("", 0)
+    _persist_conversation()
+
+
 if "config" not in st.session_state:
     st.session_state.config = load_config()
 
 if "profile_store" not in st.session_state:
     st.session_state.profile_store = ProfileStore()
+
+if "conversation_store" not in st.session_state:
+    st.session_state.conversation_store = ConversationStore()
 
 if "memory_mgr" not in st.session_state:
     st.session_state.memory_mgr = MemoryManager(
@@ -378,36 +472,39 @@ if (
         st.session_state.coordinator,
     )
 
+existing_context_manager = st.session_state.get("context_manager")
 if (
-    "context_manager" not in st.session_state
-    or getattr(st.session_state.context_manager, "model_provider", None)
+    existing_context_manager is None
+    or getattr(existing_context_manager, "model_provider", None)
     is not st.session_state.conversation_agent.model_provider
+    or not hasattr(existing_context_manager, "summary_covered_messages")
 ):
+    covered_messages = int(
+        getattr(
+            existing_context_manager,
+            "summary_covered_messages",
+            getattr(existing_context_manager, "_summary_covered_messages", 0),
+        )
+        or 0
+    )
     st.session_state.context_manager = ContextManager(
         st.session_state.conversation_agent.model_provider
     )
+    existing_summary = str(st.session_state.get("context_summary", "") or "")
+    if existing_summary:
+        st.session_state.context_manager.restore_summary_state(
+            existing_summary,
+            covered_messages,
+        )
 
 if "deep_profile" not in st.session_state or st.session_state.deep_profile is None:
     st.session_state.deep_profile = st.session_state.profile_store.get_active()
 
-if "documents" not in st.session_state:
-    st.session_state.documents = []
-if "document_hashes" not in st.session_state:
-    st.session_state.document_hashes = set()
-if "messages" not in st.session_state:
-    st.session_state.messages = _initial_messages()
-if "last_article" not in st.session_state:
-    st.session_state.last_article = None
+if "_conversation_state_loaded" not in st.session_state:
+    _restore_conversation()
+
 if "show_agent_logs" not in st.session_state:
     st.session_state.show_agent_logs = False
-if "context_summary" not in st.session_state:
-    st.session_state.context_summary = ""
-if "context_compression_count" not in st.session_state:
-    st.session_state.context_compression_count = 0
-if "context_notice" not in st.session_state:
-    st.session_state.context_notice = ""
-if "context_report" not in st.session_state:
-    st.session_state.context_report = None
 if "composer_thinking_effort" not in st.session_state:
     configured_effort = st.session_state.config.llm.thinking_effort
     st.session_state.composer_thinking_effort = (
@@ -420,6 +517,9 @@ profile_by_id = {profile.profile_id: profile for profile in saved_profiles if pr
 
 with st.sidebar:
     st.header("工作区")
+
+    if st.session_state.conversation_persistence_error:
+        st.error(f"对话持久化不可用：{st.session_state.conversation_persistence_error}")
 
     if profile_by_id:
         pending_profile_id = st.session_state.pop("_pending_profile_selection", None)
@@ -462,19 +562,13 @@ with st.sidebar:
         if st.button("清空文件", icon=":material/delete:", use_container_width=True):
             st.session_state.documents = []
             st.session_state.document_hashes = set()
+            _persist_conversation()
             st.rerun()
     else:
         st.caption("无")
 
     if st.button("新建对话", icon=":material/add_comment:", use_container_width=True):
-        st.session_state.messages = _initial_messages()
-        st.session_state.documents = []
-        st.session_state.document_hashes = set()
-        st.session_state.last_article = None
-        st.session_state.context_summary = ""
-        st.session_state.context_compression_count = 0
-        st.session_state.context_notice = ""
-        st.session_state.context_report = None
+        _reset_conversation()
         st.rerun()
 
     with st.expander("模型与 Agent 设置"):
@@ -696,6 +790,10 @@ if chat_value is not None and not skip_chat_submission:
                 extraction_status.update(label="附件读取失败", state="error", expanded=True)
                 st.error(extraction_error)
 
+    # Persist the user turn and any parsed documents before the model call so
+    # a process interruption cannot discard a long upload/parse operation.
+    _persist_conversation()
+
     if extraction_error and not user_text.strip():
         assistant_message = {
             "role": "assistant",
@@ -734,6 +832,7 @@ if chat_value is not None and not skip_chat_submission:
                         )
                     else:
                         extraction_logs.append("[CONTEXT] 已自动压缩较早对话，保留最近几轮原文")
+                    _persist_conversation()
 
                 # The current user turn is passed as ``message`` separately;
                 # avoid duplicating it in the history supplied to the agent.
@@ -773,6 +872,7 @@ if chat_value is not None and not skip_chat_submission:
                 }
 
     st.session_state.messages.append(assistant_message)
+    _persist_conversation()
     # Rebuild the chat once after a response so Streamlit recalculates the scroll
     # container with the complete latest message instead of leaving it mid-stream.
     st.session_state["_skip_chat_submission"] = True

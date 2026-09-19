@@ -5,6 +5,7 @@ llm:
   model: "deepseek-flash"               # API ID，对应 DeepSeek-V4.1-Flash
   temperature: 0.7
   max_tokens: 4096
+  context_window: null                   # 留空时按模型自动识别；未知/代理模型可手动填写，例如 1000000
   thinking_effort: "auto"              # auto / off / low / high / max；仅官方 DeepSeek 接口生效
 
 # 独立 Holdout 评测裁判配置 (留空则默认复用 llm 配置，但独立实例化并使用 temperature=0.0 进行流程隔离；支持不同模型如 claude / gpt-4o 实现跨模型盲审)
