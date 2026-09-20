@@ -18,7 +18,7 @@
 [data-testid="stMainBlockContainer"] {
   position: relative;
   flex-shrink: 0;
-  max-width: 900px;
+  max-width: 1120px;
   min-height: calc(100vh - 250px);
   padding: 5rem 1.5rem 12rem;
 }
@@ -75,6 +75,7 @@
   transform: translate(-50%, -50%);
   text-align: center;
   pointer-events: none;
+  user-select: none;
 }
 
 .echo-welcome .echo-mark {
@@ -125,17 +126,79 @@
 
 [data-testid="stChatMessageContent"][aria-label="Chat message from user"] {
   width: fit-content;
-  max-width: 78%;
+  max-width: min(78%, 760px);
   margin-left: auto !important;
   margin-right: 0 !important;
-  padding: 10px 17px;
-  border-radius: 18px;
-  background: #eef5f5;
+  padding: 8px 13px;
+  border-radius: 14px;
+  background: #eef4f5;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 [data-testid="stChatMessageContent"][aria-label="Chat message from user"] p {
   margin: 0;
+}
+
+.echo-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.echo-attachments-only {
+  margin-bottom: 0;
+}
+
+[data-testid="stChatMessageContent"][aria-label="Chat message from user"]:has(.echo-attachments-only) {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.echo-attachments-only .echo-attachment {
+  height: 38px;
+  padding: 0 11px 0 7px;
+  border: 0;
+  border-radius: 12px;
+  background: #eef4f5;
+}
+
+.echo-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 10px 0 8px;
+  border: 1px solid #dce5e7;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #455762;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.echo-attachment-kind {
+  display: grid;
+  place-items: center;
+  flex: none;
+  min-width: 23px;
+  height: 23px;
+  padding: 0 3px;
+  border-radius: 5px;
+  background: #e4eff0;
+  color: #35646a;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.echo-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-testid="stChatMessageContent"] .stExpander {
@@ -217,6 +280,53 @@
 
 [data-testid="stChatInput"] textarea::placeholder {
   color: #95a1ad;
+  user-select: none;
+}
+
+[data-testid="stChatInput"] textarea:placeholder-shown {
+  user-select: none;
+}
+
+[data-testid="stFileChips"] {
+  padding: 12px 16px 0;
+}
+
+[data-testid="stFileChip"] {
+  min-height: 38px;
+  max-width: min(240px, calc(100vw - 5rem));
+  padding: 4px 28px 4px 6px;
+  border: 1px solid #dce5e7;
+  border-radius: 8px;
+  background: #f6f9f9;
+  box-shadow: none;
+}
+
+[data-testid="stFileChip"] > div:first-child {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #e4eff0;
+  color: #35646a;
+}
+
+[data-testid="stFileChipName"] {
+  color: var(--echo-ink);
+  font-size: 13px;
+}
+
+[data-testid="stFileChipDeleteBtn"] button {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #74838d;
+}
+
+[data-testid="stFileChipDeleteBtn"] button:hover {
+  background: #e4e9ea;
+  color: #34434b;
 }
 
 [data-testid="stChatInputFileUploadButton"] {

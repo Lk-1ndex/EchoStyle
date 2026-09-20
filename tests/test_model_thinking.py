@@ -45,6 +45,17 @@ def test_thinking_controls_not_sent_to_other_compatible_providers():
     assert payload["response_format"] == {"type": "json_object"}
 
 
+def test_completion_exposes_provider_finish_reason():
+    provider = ModelProvider(LLMConfig())
+    with patch("src.core.model_provider.httpx.Client") as client:
+        client.return_value.__enter__.return_value.post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "未完待续"}, "finish_reason": "length"}]
+        }
+        assert provider.chat_completion("system", "user") == "未完待续"
+
+    assert provider.last_finish_reason == "length"
+
+
 def test_unknown_thinking_effort_rejected():
     with pytest.raises(ValidationError):
         LLMConfig(thinking_effort="extreme")

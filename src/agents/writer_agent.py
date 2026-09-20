@@ -97,12 +97,17 @@ class WriterAgent(BaseAgent):
             retry_count=state.retry_count,
         )
 
-        generated_text = self.model_provider.chat_completion(
+        generated_text = self.model_provider.generate_long_form(
             system_prompt=system_prompt,
             user_prompt=budgeted_user_prompt,
             temperature=self.llm_config.temperature,
             max_tokens=self.llm_config.max_tokens,
+            target_chars=state.word_count,
         )
+        if self.model_provider.last_generation_parts > 1:
+            state.execution_logs.append(
+                f"[WRITE] 已分 {self.model_provider.last_generation_parts} 段完成稿件。"
+            )
 
         # 记录版本草稿入链
         state.record_draft(agent_name=self.name, draft=generated_text)

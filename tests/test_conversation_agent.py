@@ -1,10 +1,14 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.agents.conversation_agent import ConversationAction, ConversationAgent
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.state import AgentState
 from src.core.config import AppConfig
+from src.core.model_provider import ModelProvider
+from src.core.exceptions import IncompleteGenerationError
 from src.core.models import (
     AntiPatterns,
     CadenceSyntax,
@@ -151,6 +155,103 @@ def test_write_uses_active_profile_and_preserves_report():
     assert result.report.overall_score == 88.0
     assert coordinator.generate_article.call_args.kwargs["profile"] == profile
     assert coordinator.generate_article.call_args.kwargs["word_count"] == 900
+
+
+def test_explicit_ten_thousand_character_request_overrides_router_default():
+    provider = MagicMock()
+    provider.chat_completion.return_value = route_payload("write", topic="城市治理", word_count=1500)
+    coordinator = MagicMock()
+    coordinator.generate_article.return_value = ("完整文章", EvaluationReport(overall_score=90), AgentState())
+    agent = ConversationAgent(AppConfig(), coordinator, model_provider=provider)
+
+    agent.respond("写一篇城市治理文章，1w字左右", [], profile=make_profile())
+
+    assert coordinator.generate_article.call_args.kwargs["word_count"] == 10_000
+
+
+def test_fallback_router_keeps_explicit_long_word_count():
+    provider = MagicMock()
+    provider.chat_completion.return_value = "not-json"
+    coordinator = MagicMock()
+    coordinator.generate_article.return_value = ("完整文章", EvaluationReport(overall_score=90), AgentState())
+    agent = ConversationAgent(AppConfig(), coordinator, model_provider=provider)
+
+    agent.respond("请写一篇一万字的文章", [], profile=make_profile())
+
+    assert coordinator.generate_article.call_args.kwargs["word_count"] == 10_000
+
+
+def test_writer_continues_before_critic_reviews_long_draft(tmp_path):
+    config = AppConfig()
+    manager = MemoryManager(vector_store=VectorStore(storage_path=str(tmp_path / "memory.json")))
+    coordinator = CoordinatorAgent(config, memory_manager=manager)
+    provider = coordinator.writer_agent.model_provider
+    chunks = ["甲" * 3000, "乙" * 3000, "丙" * 3000, "丁" * 1000]
+
+    def complete(**kwargs):
+        provider.last_finish_reason = "length" if len(chunks) > 1 else "stop"
+        return chunks.pop(0)
+
+    state = AgentState(memory_snapshot=[])
+    with patch.object(provider, "chat_completion", side_effect=complete) as chat, \
+         patch.object(coordinator.critic_agent.judge, "evaluate", return_value=EvaluationReport(overall_score=90)) as judge:
+        article, _, _ = coordinator.generate_article(
+            profile=make_profile(), topic="城市治理", word_count=10_000, state=state
+        )
+
+    assert len(article.replace("\n", "")) == 10_000
+    assert chat.call_count == 4
+    assert judge.call_args.args[0] == article
+    assert "甲" * 3000 in chat.call_args_list[1].kwargs["user_prompt"]
+
+
+def test_incomplete_long_draft_is_not_sent_to_critic(tmp_path):
+    config = AppConfig()
+    manager = MemoryManager(vector_store=VectorStore(storage_path=str(tmp_path / "memory.json")))
+    coordinator = CoordinatorAgent(config, memory_manager=manager)
+    provider = coordinator.writer_agent.model_provider
+    with patch.object(provider, "chat_completion", return_value="同一段正文"), \
+         patch.object(coordinator.critic_agent.judge, "evaluate") as judge:
+        with pytest.raises(IncompleteGenerationError) as error:
+            coordinator.generate_article(
+                profile=make_profile(), topic="城市治理", word_count=10_000,
+                state=AgentState(memory_snapshot=[]),
+            )
+
+    assert error.value.partial_text == "同一段正文"
+    judge.assert_not_called()
+
+
+def test_long_form_continues_after_an_early_natural_stop():
+    provider = ModelProvider(AppConfig().llm)
+    chunks = ["甲" * 4000, "乙" * 5500]
+
+    def complete(**kwargs):
+        provider.last_finish_reason = "stop"
+        return chunks.pop(0)
+
+    with patch.object(provider, "chat_completion", side_effect=complete) as chat:
+        article = provider.generate_long_form("system", "user", target_chars=10_000)
+
+    assert len(article.replace("\n", "")) >= 9_500
+    assert chat.call_count == 2
+    assert "甲" * 4000 in chat.call_args_list[1].kwargs["user_prompt"]
+
+
+def test_long_form_removes_a_repeated_full_draft_prefix():
+    provider = ModelProvider(AppConfig().llm)
+    first_part = "甲" * 4000
+    chunks = [first_part, first_part + "乙" * 5500]
+
+    def complete(**kwargs):
+        provider.last_finish_reason = "stop"
+        return chunks.pop(0)
+
+    with patch.object(provider, "chat_completion", side_effect=complete):
+        article = provider.generate_long_form("system", "user", target_chars=10_000)
+
+    assert article.count(first_part) == 1
+    assert len("".join(article.split())) == 9_500
 
 
 def test_write_passes_compacted_context_into_controlled_writer():

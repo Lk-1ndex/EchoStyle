@@ -16,6 +16,7 @@ from src.agents.conversation_agent import ConversationAgent, ConversationResult
 from src.agents.coordinator import CoordinatorAgent
 from src.core.config import load_config
 from src.core.context_manager import ContextManager, ContextSnapshot
+from src.core.exceptions import IncompleteGenerationError
 from src.memory.conversation_store import ConversationStore
 from src.memory.memory_manager import MemoryManager
 from src.memory.profile_store import ProfileStore
@@ -313,10 +314,23 @@ def _extract_wechat_urls(
 
 def _render_message(message: Dict[str, Any], index: int) -> None:
     with st.chat_message(message["role"]):
-        st.markdown(message.get("content", ""))
+        content = message.get("content", "")
         attachments = message.get("attachments") or []
         if attachments:
-            st.caption("附件：" + "、".join(attachments))
+            attachment_class = "echo-attachments echo-attachments-only" if not content else "echo-attachments"
+            chips = ""
+            for name in attachments:
+                suffix = Path(str(name)).suffix.removeprefix(".").upper()
+                file_kind = {"DOCX": "DOC", "TEXT": "TXT"}.get(suffix, suffix[:4] or "FILE")
+                chips += (
+                    '<span class="echo-attachment">'
+                    f'<span class="echo-attachment-kind" aria-hidden="true">{escape(file_kind)}</span>'
+                    f'<span class="echo-attachment-name">{escape(str(name))}</span>'
+                    '</span>'
+                )
+            st.markdown(f'<div class="{attachment_class}">{chips}</div>', unsafe_allow_html=True)
+        if content:
+            st.markdown(content)
 
         report = message.get("report")
         if report:
@@ -340,7 +354,7 @@ def _render_message(message: Dict[str, Any], index: int) -> None:
             st.download_button(
                 "下载 Markdown",
                 data=article,
-                file_name=f"echostyle_{index}.md",
+                file_name=f"echostyle_{'partial_' if message.get('incomplete') else ''}{index}.md",
                 mime="text/markdown",
                 key=f"download_article_{index}",
                 icon=":material/download:",
@@ -772,7 +786,7 @@ if chat_value is not None and not skip_chat_submission:
         welcome_slot.empty()
     user_text, uploaded_files = _parse_chat_input(chat_value)
     attachment_names = [uploaded_file.name for uploaded_file in uploaded_files]
-    display_text = user_text.strip() or "已上传文件"
+    display_text = user_text.strip()
     user_message = {"role": "user", "content": display_text, "attachments": attachment_names}
     st.session_state.messages.append(user_message)
     _render_message(user_message, len(st.session_state.messages) - 1)
@@ -886,11 +900,25 @@ if chat_value is not None and not skip_chat_submission:
                     st.session_state.last_article = result.article
                 assistant_message = _store_assistant_result(result)
             except Exception as exc:
-                assistant_message = {
-                    "role": "assistant",
-                    "content": f"处理失败：{exc}",
-                    "logs": extraction_logs,
-                }
+                if isinstance(exc, IncompleteGenerationError):
+                    partial_text = exc.partial_text
+                    st.session_state.last_article = partial_text or st.session_state.last_article
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": (
+                            f"写作未完成：{exc} 已保留约 {len(partial_text)} / {exc.target_chars} 字的正文。"
+                            "\n\n" + partial_text
+                        ),
+                        "article": partial_text or None,
+                        "incomplete": True,
+                        "logs": extraction_logs,
+                    }
+                else:
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": f"处理失败：{exc}",
+                        "logs": extraction_logs,
+                    }
 
     st.session_state.messages.append(assistant_message)
     _persist_conversation()

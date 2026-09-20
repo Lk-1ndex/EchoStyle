@@ -25,6 +25,15 @@ class ModelProviderError(EchoStyleException):
     pass
 
 
+class IncompleteGenerationError(ModelProviderError):
+    """A long draft stopped before reaching the requested length."""
+
+    def __init__(self, partial_text: str, target_chars: int, reason: str):
+        self.partial_text = partial_text
+        self.target_chars = target_chars
+        super().__init__(reason)
+
+
 class EmbeddingUnavailableError(EchoStyleException):
     """向量服务不可用异常（Fail-Closed 严控检索语义纯度，拒绝静默退化）"""
     pass
@@ -45,6 +54,5 @@ class EmbeddingDimensionMismatchError(EchoStyleException):
 class EvaluationUnavailableError(EchoStyleException):
     """评测裁决服务不可用或返回格式异常（Fail-Closed 严控评测客观性，严禁以默认虚拟分污染基准）"""
     pass
-
 
 

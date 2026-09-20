@@ -7,9 +7,11 @@ from zipfile import ZipFile
 import pytest
 
 from src.agents.coordinator import CoordinatorAgent
+from src.agents.conversation_agent import ConversationAgent
 from src.agents.extractor_agent import ExtractorAgent
 from src.agents.state import AgentState
 from src.core.config import AppConfig
+from src.core.exceptions import IncompleteGenerationError
 from src.extractors.inspector import DocumentInspector
 from src.extractors.wechat import WeChatExtractor
 from src.extractors.word import WordExtractor
@@ -144,6 +146,29 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
         assert persisted is not None
         assert persisted["documents"][0]["content"] == "Sample article body"
         assert persisted["messages"][0]["attachments"] == ["sample.md"]
+
+
+def test_web_preserves_incomplete_draft_without_a_quality_report(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    import streamlit as st
+
+    monkeypatch.chdir(tmp_path)
+    app_path = Path(__file__).resolve().parents[1] / "src/web/app.py"
+    with patch("src.core.config.load_config", return_value=AppConfig()), patch.object(
+        st, "chat_input", return_value="写一篇一万字的文章"
+    ), patch.object(
+        ConversationAgent, "respond",
+        side_effect=IncompleteGenerationError("保留下来的部分正文", 10_000, "续写达到上限"),
+    ):
+        app = AppTest.from_file(app_path, default_timeout=10).run()
+
+    assert not app.exception
+    message = app.session_state["messages"][-1]
+    assert message["incomplete"] is True
+    assert message["article"] == "保留下来的部分正文"
+    assert message.get("report") is None
+    assert app.session_state["last_article"] == "保留下来的部分正文"
+    assert ConversationStore("profiles/conversation_state_v1.json").load()["messages"][-1] == message
 
 
 def test_web_restores_persisted_conversation(tmp_path, monkeypatch):

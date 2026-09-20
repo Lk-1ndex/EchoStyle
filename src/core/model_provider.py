@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 import httpx
 import tiktoken
 from src.core.config import LLMConfig, EmbeddingConfig
-from src.core.exceptions import EmbeddingUnavailableError, ModelProviderError
+from src.core.exceptions import EmbeddingUnavailableError, IncompleteGenerationError, ModelProviderError
 
 
 class ModelProvider:
@@ -47,6 +47,8 @@ class ModelProvider:
         self.llm_config = llm_config
         self.embedding_config = embedding_config or EmbeddingConfig()
         self.fallback_model = fallback_model
+        self.last_finish_reason: Optional[str] = None
+        self.last_generation_parts = 0
 
         try:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -85,6 +87,7 @@ class ModelProvider:
         max_retries: int = 3,
     ) -> str:
         temp = temperature if temperature is not None else self.llm_config.temperature
+        self.last_finish_reason = None
         m_tokens = self.request_output_cap(max_tokens)
 
         safe_sys_prompt, safe_user_prompt = self.fit_context_window(system_prompt, user_prompt)
@@ -126,6 +129,80 @@ class ModelProvider:
                     break
 
         raise ModelProviderError(f"所有模型及重试策略均已耗尽，调用失败: {str(last_err)}") from last_err
+
+    def generate_long_form(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        target_chars: int,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Continue bounded drafts across requests without treating a cut-off as final."""
+        output_cap = self.request_output_cap(max_tokens)
+        estimated_chars_per_part = max(1, int(output_cap * 0.65))
+        target_chars = max(0, int(target_chars))
+        expected_parts = (target_chars + estimated_chars_per_part - 1) // estimated_chars_per_part
+        # Leave several bounded recovery turns for models whose visible answer
+        # is much shorter than max_tokens because reasoning shares the budget.
+        max_parts = min(16, max(4, expected_parts + 4))
+        minimum_chars = int(target_chars * 0.95)
+        self.last_generation_parts = 0
+        draft = ""
+        next_prompt = user_prompt
+        previous_finish_reason = None
+
+        for _ in range(max_parts):
+            self.last_finish_reason = None
+            try:
+                part = self.chat_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=next_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ).strip()
+            except ModelProviderError as exc:
+                if draft:
+                    raise IncompleteGenerationError(draft, target_chars, "续写请求失败，稿件尚未完成。") from exc
+                raise
+
+            if draft and part.startswith(draft):
+                part = part[len(draft):].lstrip()
+            if not part or (draft and part in draft):
+                raise IncompleteGenerationError(draft, target_chars, "模型没有继续提供新正文，稿件尚未完成。")
+
+            if draft:
+                overlap = next(
+                    (length for length in range(min(300, len(draft), len(part)), 19, -1)
+                     if draft.endswith(part[:length])),
+                    0,
+                )
+                separator = "" if previous_finish_reason == "length" or overlap else "\n\n"
+                draft += separator + part[overlap:]
+            else:
+                draft = part
+            self.last_generation_parts += 1
+            previous_finish_reason = self.last_finish_reason
+            visible_chars = len("".join(draft.split()))
+
+            if previous_finish_reason != "length" and (
+                target_chars <= estimated_chars_per_part or visible_chars >= minimum_chars
+            ):
+                return draft
+
+            remaining = max(0, target_chars - visible_chars)
+            next_prompt = (
+                f"{user_prompt}\n\n以下是已写出的正文，不要重写、复述或省略它：\n{draft}\n\n"
+                f"请紧接最后一个字续写正文，仍需约 {remaining} 字。"
+                "保持原有标题层级、语气和论证顺序，不要重新开头；"
+                "写到完整结尾时自然收束，不要输出续写说明。"
+            )
+
+        raise IncompleteGenerationError(
+            draft,
+            target_chars,
+            f"已达到 {max_parts} 段续写上限，稿件尚未完成。",
+        )
 
     def assemble_budgeted_prompt(
         self,
@@ -301,7 +378,9 @@ class ModelProvider:
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            choice = data["choices"][0]
+            self.last_finish_reason = choice.get("finish_reason")
+            return str(choice["message"].get("content") or "").strip()
 
     def has_embedding_credentials(self) -> bool:
         """Whether an embedding request has usable credentials after fallback resolution."""

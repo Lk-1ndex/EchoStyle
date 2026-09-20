@@ -100,6 +100,8 @@ class CoordinatorAgent(BaseAgent):
         state.key_points = key_points or state.key_points
         if word_count is not None:
             state.word_count = word_count
+        elif initial_draft is not None and revision_instruction:
+            state.word_count = max(1, len("".join(initial_draft.split())))
         if target_audience is not None:
             state.target_audience = target_audience
         state.max_retries = self.config.agent.max_reflections
@@ -222,7 +224,7 @@ class CoordinatorAgent(BaseAgent):
         profile: DeepStyleProfile,
         topic: str,
         key_points: str = "",
-        word_count: int = 1500,
+        word_count: Optional[int] = None,
         target_audience: str = "大众读者",
         state: Optional[AgentState] = None,
         initial_draft: Optional[str] = None,
