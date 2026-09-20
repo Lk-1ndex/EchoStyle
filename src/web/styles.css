@@ -17,9 +17,10 @@
 
 [data-testid="stMainBlockContainer"] {
   position: relative;
+  flex-shrink: 0;
   max-width: 900px;
   min-height: calc(100vh - 250px);
-  padding: 1.2rem 1.5rem 12rem;
+  padding: 5rem 1.5rem 12rem;
 }
 
 [data-testid="stSidebar"] {
@@ -102,7 +103,7 @@
 
 [data-testid="stChatMessage"] {
   padding: 0.7rem 0;
-  scroll-margin-top: 2rem;
+  scroll-margin-top: 5rem;
   border: 0;
   background: transparent;
   gap: 0;
@@ -150,7 +151,7 @@
 }
 
 [data-testid="stAppScrollToBottomContainer"] {
-  scroll-padding-top: 2rem;
+  scroll-padding-top: 5rem;
   scroll-padding-bottom: 15rem;
 }
 
@@ -328,7 +329,7 @@
   margin-left: auto;
   transform: translateY(-8px);
   border-radius: 50%;
-  cursor: help;
+  cursor: default;
   pointer-events: auto;
   outline: none;
 }
@@ -399,11 +400,6 @@
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-/* See the synchronization note in app.py. */
-.st-key-compat_profile_selector {
-  display: none !important;
 }
 
 .st-key-thinking_effort_live_bridge {
@@ -666,7 +662,11 @@
 @media (max-width: 700px) {
   [data-testid="stMainBlockContainer"] {
     min-height: calc(100vh - 220px);
-    padding: 0.9rem 1rem 13rem;
+    padding: 4.5rem 1rem 13rem;
+  }
+
+  [data-testid="stChatMessage"] {
+    scroll-margin-top: 4.5rem;
   }
 
   .echo-welcome {

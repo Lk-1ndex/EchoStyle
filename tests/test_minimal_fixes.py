@@ -114,6 +114,25 @@ def test_duplicate_ids_and_interleaved_instances_do_not_lose_data(tmp_path):
     assert len(first.get_all(profile_id="beta")) == 1
 
 
+def test_unchanged_vector_store_is_not_reparsed_on_read(tmp_path):
+    storage_path = str(tmp_path / "memory.json")
+    first = VectorStore(storage_path=storage_path)
+    second = VectorStore(storage_path=storage_path)
+    chunk = {"id": "a", "content": "Original", "metadata": {"profile_id": "alpha"}}
+    first.add_chunks([chunk])
+
+    with patch.object(first, "_load", wraps=first._load) as load:
+        assert len(first.get_all(profile_id="alpha")) == 1
+        assert len(first.get_all(profile_id="alpha")) == 1
+        assert load.call_count == 0
+
+        second.add_chunks([{"id": "b", "content": "New", "metadata": {"profile_id": "alpha"}}])
+        assert len(first.get_all(profile_id="alpha")) == 2
+        assert load.call_count == 1
+        assert len(first.get_all(profile_id="alpha")) == 2
+        assert load.call_count == 1
+
+
 def test_corrupt_store_raises_without_overwriting_it(tmp_path):
     storage_path = tmp_path / "memory.json"
     storage_path.write_text("{broken json", encoding="utf-8")
@@ -243,6 +262,7 @@ def test_web_chat_build_write_and_profile_restore_without_network(tmp_path, monk
         app = AppTest.from_file(Path(__file__).resolve().parents[1] / "src/web/app.py", default_timeout=10).run()
     assert not app.exception
     assert len(app.chat_input) == 1
+    assert not any(item.label == "当前文风画像" for item in app.selectbox)
     assert app.session_state["messages"] == []
     assert any("What should we write?" in item.value for item in app.markdown)
 
@@ -282,6 +302,7 @@ def test_web_chat_build_write_and_profile_restore_without_network(tmp_path, monk
     second_profile = make_profile("profile-b")
     restored_app.session_state["profile_store"].save(second_profile, make_active=False)
     restored_app.run()
+    assert sum(item.label == "当前文风画像" for item in restored_app.selectbox) == 1
     profile_selector = restored_app.selectbox[0]
     profile_selector.select_index(1).run()
     assert not restored_app.exception

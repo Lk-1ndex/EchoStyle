@@ -187,3 +187,32 @@ def test_web_restores_persisted_conversation(tmp_path, monkeypatch):
     assert app.session_state["document_hashes"] == {"saved-hash"}
     assert app.session_state["context_summary"] == "保留的自动摘要"
     assert app.session_state["context_manager"].summary_covered_messages == 1
+
+
+def test_web_migrates_legacy_context_manager_in_live_session(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    import src.core.context_manager as context_manager_module
+
+    class LegacyContextManager:
+        _summary_covered_messages = 1
+        model_provider = None
+
+    monkeypatch.chdir(tmp_path)
+    app_path = Path(__file__).resolve().parents[1] / "src/web/app.py"
+    app = AppTest.from_file(app_path, default_timeout=10)
+    app.session_state["context_manager"] = LegacyContextManager()
+    app.session_state["messages"] = [
+        {"role": "user", "content": "此前的写作要求"},
+        {"role": "assistant", "content": "此前的回复"},
+    ]
+    app.session_state["context_summary"] = "此前的写作要求需要保留"
+
+    with patch("src.core.config.load_config", return_value=AppConfig()), patch.object(
+        context_manager_module, "ContextManager", LegacyContextManager
+    ):
+        app.run()
+
+    assert not app.exception
+    assert app.session_state["messages"][0]["content"] == "此前的写作要求"
+    assert app.session_state["context_manager"].summary_covered_messages == 1
+    assert ConversationStore("profiles/conversation_state_v1.json").load()["context_summary"] == "此前的写作要求需要保留"

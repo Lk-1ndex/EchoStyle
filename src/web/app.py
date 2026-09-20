@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import importlib
 from html import escape
 import os
 import re
@@ -190,6 +191,18 @@ def _context_snapshot() -> ContextSnapshot:
     )
 
 
+def _summary_covered_messages(manager: Any) -> int:
+    """Read the compaction cursor from either side of a live code reload."""
+    return int(
+        getattr(
+            manager,
+            "summary_covered_messages",
+            getattr(manager, "_summary_covered_messages", 0),
+        )
+        or 0
+    )
+
+
 def _activate_profile(profile_id: str) -> None:
     """Make a stored profile active from either profile selector."""
     profile_store: ProfileStore = st.session_state.profile_store
@@ -353,7 +366,7 @@ def _conversation_payload() -> Dict[str, Any]:
         "document_hashes": sorted(st.session_state.document_hashes),
         "last_article": st.session_state.last_article,
         "context_summary": st.session_state.context_summary,
-        "summary_covered_messages": manager.summary_covered_messages,
+        "summary_covered_messages": _summary_covered_messages(manager),
         "context_compression_count": st.session_state.context_compression_count,
         "context_notice": st.session_state.context_notice,
         "context_report": st.session_state.context_report,
@@ -408,13 +421,14 @@ def _restore_conversation() -> None:
     covered_messages = (
         source["summary_covered_messages"]
         if snapshot is not None
-        else st.session_state.context_manager.summary_covered_messages
+        else _summary_covered_messages(st.session_state.context_manager)
     )
     st.session_state.context_manager.restore_summary_state(
         st.session_state.context_summary,
         covered_messages,
     )
     st.session_state._conversation_state_loaded = True
+    st.session_state._scroll_to_latest_reply = bool(st.session_state.messages)
     if snapshot is None and (
         st.session_state.messages
         or st.session_state.documents
@@ -473,20 +487,19 @@ if (
     )
 
 existing_context_manager = st.session_state.get("context_manager")
+if not hasattr(ContextManager, "restore_summary_state"):
+    # Streamlit reruns app.py but can keep imported modules and session objects
+    # from before a code update. Refresh the class before migrating that state.
+    import src.core.context_manager as context_manager_module
+
+    ContextManager = importlib.reload(context_manager_module).ContextManager
 if (
     existing_context_manager is None
     or getattr(existing_context_manager, "model_provider", None)
     is not st.session_state.conversation_agent.model_provider
-    or not hasattr(existing_context_manager, "summary_covered_messages")
+    or not hasattr(existing_context_manager, "restore_summary_state")
 ):
-    covered_messages = int(
-        getattr(
-            existing_context_manager,
-            "summary_covered_messages",
-            getattr(existing_context_manager, "_summary_covered_messages", 0),
-        )
-        or 0
-    )
+    covered_messages = _summary_covered_messages(existing_context_manager)
     st.session_state.context_manager = ContextManager(
         st.session_state.conversation_agent.model_provider
     )
@@ -515,13 +528,61 @@ saved_profiles = st.session_state.profile_store.list_profiles()
 profile_by_id = {profile.profile_id: profile for profile in saved_profiles if profile.profile_id}
 
 
+welcome_slot = st.empty() if not st.session_state.messages else None
+if welcome_slot is not None:
+    welcome_slot.markdown(
+        f'<div class="echo-welcome">{BRAND_MARK}'
+        '<h1>What should we write?</h1></div>',
+        unsafe_allow_html=True,
+    )
+
+for message_index, stored_message in enumerate(st.session_state.messages):
+    _render_message(stored_message, message_index)
+
+skip_chat_submission = st.session_state.pop("_skip_chat_submission", False)
+chat_value = st.chat_input(
+    "Do anything",
+    accept_file="multiple",
+    file_type=["pdf", "docx", "doc", "md", "txt"],
+    key="conversation_input",
+)
+
+if st.session_state.pop("_scroll_to_latest_reply", False):
+    components.html(
+        """
+        <script>
+        (() => {
+          const host = window.parent.document;
+          const expectedCount = __EXPECTED_COUNT__;
+          const alignReply = () => {
+            const messages = [...host.querySelectorAll('[data-testid="stChatMessage"]')];
+            if (messages.length < expectedCount) return;
+            const latestUser = messages.reverse().find((message) =>
+              message.querySelector('[aria-label="Chat message from user"]')
+            );
+            const start = latestUser || messages[0];
+            if (start) start.scrollIntoView({ block: "start", behavior: "instant" });
+          };
+          const observer = new MutationObserver(() => window.requestAnimationFrame(alignReply));
+          observer.observe(host.body, { childList: true, subtree: true });
+          for (const delay of [0, 150, 500, 1200, 2500]) window.setTimeout(alignReply, delay);
+          window.setTimeout(() => observer.disconnect(), 2700);
+          window.addEventListener("unload", () => observer.disconnect());
+        })();
+        </script>
+        """.replace("__EXPECTED_COUNT__", str(len(st.session_state.messages))),
+        height=0,
+        scrolling=False,
+    )
+
+
 with st.sidebar:
     st.header("工作区")
 
     if st.session_state.conversation_persistence_error:
         st.error(f"对话持久化不可用：{st.session_state.conversation_persistence_error}")
 
-    if profile_by_id:
+    if len(profile_by_id) > 1:
         pending_profile_id = st.session_state.pop("_pending_profile_selection", None)
         current_profile_id = (
             st.session_state.deep_profile.profile_id
@@ -543,6 +604,9 @@ with st.sidebar:
             key="active_profile_selector",
             on_change=lambda: _activate_profile(st.session_state.active_profile_selector),
         )
+    elif profile_by_id:
+        profile = next(iter(profile_by_id.values()))
+        st.caption(f"当前文风画像：{profile.name} · {profile.profile_id[:12]}")
     else:
         st.caption("尚未建立文风画像")
 
@@ -613,41 +677,6 @@ with st.sidebar:
         st.session_state.config.agent.max_reflections = max_reflections
         st.session_state.config.extractor.pdf_engine = pdf_engine
         st.session_state.coordinator.critic_agent.quality_threshold = quality_threshold
-
-
-# Streamlit renders fixed composer widgets before sidebar widgets in its
-# element tree.  Keep a synchronized, visually hidden profile selector in the
-# main tree so profile selection remains deterministic for keyboard users and
-# the existing session state contract; the visible selector stays in the
-# workspace sidebar.
-if profile_by_id:
-    current_profile_id = (
-        st.session_state.deep_profile.profile_id
-        if st.session_state.deep_profile and st.session_state.deep_profile.profile_id in profile_by_id
-        else next(iter(profile_by_id))
-    )
-    st.session_state.compat_profile_selector = current_profile_id
-    st.selectbox(
-        "当前文风画像",
-        options=list(profile_by_id),
-        format_func=lambda profile_id: f"{profile_by_id[profile_id].name} · {profile_id[:12]}",
-        key="compat_profile_selector",
-        label_visibility="collapsed",
-        on_change=lambda: _activate_profile(st.session_state.compat_profile_selector),
-    )
-
-
-welcome_slot = st.empty() if not st.session_state.messages else None
-if welcome_slot is not None:
-    welcome_slot.markdown(
-        f'<div class="echo-welcome">{BRAND_MARK}'
-        '<h1>What should we write?</h1></div>',
-        unsafe_allow_html=True,
-    )
-
-for message_index, stored_message in enumerate(st.session_state.messages):
-    _render_message(stored_message, message_index)
-
 
 context_snapshot = _context_snapshot()
 context_limit = max(1, context_snapshot.soft_limit)
@@ -737,14 +766,6 @@ st.session_state.config.llm.thinking_effort = thinking_effort
 with st.container(key="thinking_effort_live_bridge"):
     _render_thinking_effort_live_bridge()
 
-
-skip_chat_submission = st.session_state.pop("_skip_chat_submission", False)
-chat_value = st.chat_input(
-    "Do anything",
-    accept_file="multiple",
-    file_type=["pdf", "docx", "doc", "md", "txt"],
-    key="conversation_input",
-)
 
 if chat_value is not None and not skip_chat_submission:
     if welcome_slot is not None:
@@ -876,4 +897,5 @@ if chat_value is not None and not skip_chat_submission:
     # Rebuild the chat once after a response so Streamlit recalculates the scroll
     # container with the complete latest message instead of leaving it mid-stream.
     st.session_state["_skip_chat_submission"] = True
+    st.session_state["_scroll_to_latest_reply"] = True
     st.rerun()

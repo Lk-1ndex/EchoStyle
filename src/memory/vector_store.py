@@ -33,7 +33,7 @@ class VectorStore:
         self.model_provider = ModelProvider(self.llm_config, self.embedding_config)
         self.chunks: List[Dict[str, Any]] = []
         self._file_lock = FileLock(f"{self.storage_path}.lock", timeout=60)
-        self._has_persisted_state = False
+        self._loaded_signature: Optional[Tuple[int, int, int]] = None
         self._load()
 
     def add_chunks(self, chunks: List[Dict[str, Any]]) -> int:
@@ -356,23 +356,30 @@ class VectorStore:
     def _load(self):
         if self.storage_path.exists():
             with open(self.storage_path, "r", encoding="utf-8") as f:
+                stat = os.fstat(f.fileno())
                 loaded = json.load(f)
             if not isinstance(loaded, list) or any(not isinstance(c, dict) for c in loaded):
                 raise ValueError(f"记忆库格式损坏: {self.storage_path}")
             self.chunks = loaded
-            self._has_persisted_state = True
+            self._loaded_signature = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
         else:
             self.chunks = []
-            self._has_persisted_state = False
+            self._loaded_signature = None
+
+    def _disk_signature(self) -> Optional[Tuple[int, int, int]]:
+        try:
+            stat = self.storage_path.stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
     def _refresh_from_disk(self, locked: bool = False):
-        if not self.storage_path.exists() and not self._has_persisted_state:
-            return
         if locked:
             self._load()
-        else:
+        elif self._disk_signature() != self._loaded_signature:
             with self._file_lock:
-                self._load()
+                if self._disk_signature() != self._loaded_signature:
+                    self._load()
 
     def _save(self):
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -384,7 +391,7 @@ class VectorStore:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, self.storage_path)
-            self._has_persisted_state = True
+            self._loaded_signature = self._disk_signature()
         finally:
             if temp_path is not None and temp_path.exists():
                 temp_path.unlink()
