@@ -18,6 +18,7 @@ from rich.table import Table
 from src.core.config import load_config
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.state import AgentState
+from src.version import __version__
 
 console = Console()
 
@@ -58,7 +59,11 @@ SAMPLE_ESSAY_2 = """# 为什么我不喜欢“正确的废话”
 
 
 def run_benchmark():
-    console.print(Panel.fit("[bold magenta]EchoStyle 2.5 — 真实作者文风建模与智能仿写 Benchmark 评测基准[/bold magenta]"))
+    console.print(
+        Panel.fit(
+            f"[bold magenta]EchoStyle {__version__} — 真实作者文风建模与智能仿写 Benchmark 评测基准[/bold magenta]"
+        )
+    )
 
     config = load_config()
     if not config.llm.api_key:
@@ -146,7 +151,7 @@ def run_benchmark():
 
     # 保存 Benchmark 报告
     report_file = Path("./profiles/benchmark_report.md")
-    report_md = f"""# EchoStyle 2.5 基准测试报告 (Benchmark Report)
+    report_md = f"""# EchoStyle {__version__} 基准测试报告 (Benchmark Report)
 
 - **基准测试时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
 - **评测主题**：{benchmark_topic}

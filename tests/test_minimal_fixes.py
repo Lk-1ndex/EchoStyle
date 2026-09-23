@@ -66,6 +66,48 @@ def test_new_profile_id_round_trip_and_legacy_profile_rejected(tmp_path):
         coordinator.run(AgentState(topic="test"), profile=old_profile, initial_draft="Draft")
 
 
+def test_profile_save_failure_rolls_back_only_new_profile_chunks(tmp_path):
+    store = VectorStore(storage_path=str(tmp_path / "memory.json"))
+    manager = MemoryManager(vector_store=store)
+    manager.ingest_article("Existing", "Existing profile paragraph remains untouched.", profile_id="existing")
+    profile_store = ProfileStore(str(tmp_path / "profiles.json"))
+    analyst = AnalystAgent(LLMConfig(), manager, profile_store=profile_store)
+    analyst.distiller.distill = lambda *args, **kwargs: make_profile().qualitative
+
+    with patch.object(profile_store, "save", side_effect=OSError("profile write failed")):
+        with pytest.raises(OSError, match="profile write failed"):
+            analyst.run(
+                AgentState(),
+                [
+                    {"title": "One", "content": "First complete paragraph for the new profile."},
+                    {"title": "Two", "content": "Second complete paragraph for the new profile."},
+                ],
+            )
+
+    assert manager.get_memory_stats(profile_id="existing")["total_chunks"] == 1
+    assert len(store.get_all()) == 0
+    assert profile_store.list_profiles() == []
+
+
+def test_profile_save_error_remains_primary_when_rollback_fails(tmp_path):
+    store = VectorStore(storage_path=str(tmp_path / "memory.json"))
+    manager = MemoryManager(vector_store=store)
+    profile_store = ProfileStore(str(tmp_path / "profiles.json"))
+    analyst = AnalystAgent(LLMConfig(), manager, profile_store=profile_store)
+    analyst.distiller.distill = lambda *args, **kwargs: make_profile().qualitative
+
+    with patch.object(profile_store, "save", side_effect=OSError("primary failure")), patch.object(
+        manager, "remove_chunks", side_effect=RuntimeError("rollback failure")
+    ):
+        with pytest.raises(OSError, match="primary failure") as exc_info:
+            analyst.run(
+                AgentState(),
+                [{"title": "One", "content": "A complete paragraph for failure injection."}],
+            )
+
+    assert any("rollback failure" in note for note in exc_info.value.__notes__)
+
+
 def test_profile_scoped_dense_hybrid_stats_and_clear(tmp_path):
     store = VectorStore(storage_path=str(tmp_path / "memory.json"))
     manager = MemoryManager(vector_store=store)

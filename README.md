@@ -17,7 +17,7 @@ EchoStyle 从 PDF、Word、Markdown、纯文本或微信公众号文章中提取
 - **对话式工作台**：上传文件后直接用自然语言提出问题或写作任务。
 - **文档解析**：PDF 默认使用 MinerU，失败时回退到 MarkItDown；同时支持 DOCX、Markdown、TXT 和微信公众号链接。
 - **文风建模**：结合统计语言学指标与 LLM 语义分析生成 `DeepStyleProfile`。
-- **风格记忆**：将样文按篇章功能切片，使用 Dense + BM25 + RRF 进行检索。
+- **风格记忆**：将样文按篇章功能切片；默认使用 BM25L 稀疏检索，也可显式启用 Dense + BM25L + RRF。
 - **受控写作**：Coordinator 调度 Writer 与 Critic，在有限状态机中执行生成、评价、修改和回滚。
 - **连续对话**：自动估算上下文占用，并在接近上限时压缩较早消息。
 - **实验工具**：提供消融实验、样本规模实验、双盲评测和失败案例分析。
@@ -43,7 +43,7 @@ cp config.example.yaml config.yaml
 
 ### 2. 配置模型
 
-编辑本地 `config.yaml`。至少需要配置生成模型；建立 Dense 风格记忆时还应配置 Embedding 服务。
+编辑本地 `config.yaml`。生成、分析与问答至少需要配置生成模型。Embedding 模式必须显式选择：默认 `sparse` 不发起 Embedding HTTP 请求；使用向量检索时选择 `dense`，并配置独立的 Embedding 服务。
 
 ```yaml
 llm:
@@ -55,12 +55,13 @@ llm:
   thinking_effort: "auto"
 
 embedding:
-  api_key: "your-embedding-api-key"
-  base_url: "https://api.siliconflow.cn/v1"
-  model: "Pro/BAAI/bge-m3"
+  mode: "sparse"  # sparse / dense
+  api_key: ""
+  base_url: ""
+  model: ""
 ```
 
-模型接口需要兼容 OpenAI 风格的 Chat Completions 或 Embeddings 协议。完整配置项及默认值见 [`config.example.yaml`](config.example.yaml)。
+模型接口需要兼容 OpenAI 风格的 Chat Completions 或 Embeddings 协议。`dense` 模式要求 `api_key`、`base_url` 和 `model` 三项齐全，并且永远不会复用生成模型的凭据或地址。完整配置项及默认值见 [`config.example.yaml`](config.example.yaml)。
 
 也可以使用环境变量覆盖部分敏感配置：
 
@@ -68,7 +69,8 @@ embedding:
 | --- | --- |
 | `OPENAI_API_KEY` | 生成模型 API Key |
 | `OPENAI_BASE_URL` | 生成模型 Base URL |
-| `EMBEDDING_API_KEY` | Embedding API Key |
+| `EMBEDDING_MODE` | 检索模式：`sparse` 或 `dense` |
+| `EMBEDDING_API_KEY` | Embedding API Key（仅 dense） |
 | `EMBEDDING_BASE_URL` | Embedding Base URL |
 | `EMBEDDING_MODEL` | Embedding 模型名 |
 | `EVALUATOR_API_KEY` | 独立评测模型 API Key |
@@ -169,11 +171,11 @@ flowchart LR
 | --- | --- | :---: |
 | 完整文风画像及当前激活项 | `profiles/deep_style_profiles_v2.json` | 是 |
 | 风格记忆切片及向量 | `profiles/style_memory_v2.json` | 是 |
-| 当前聊天记录与最后一篇稿件 | `profiles/conversation_state_v1.json` | 是 |
-| 当前对话文件的解析正文与元数据 | `profiles/conversation_state_v1.json` | 是 |
-| 自动压缩摘要、报告与覆盖游标 | `profiles/conversation_state_v1.json` | 是 |
+| 当前聊天记录与最后一篇稿件 | `profiles/conversation_state_v2/` | 是 |
+| 当前对话文件的解析正文与元数据 | `profiles/conversation_state_v2/` | 是 |
+| 自动压缩摘要、报告与覆盖游标 | `profiles/conversation_state_v2/manifest.json` | 是 |
 
-对话快照采用文件锁和原子替换写入。系统保存附件解析后的正文与元数据，不额外复制原始 PDF 或 DOCX 二进制；重启后可以继续问答和写作。点击“新建对话”会清空并覆盖当前会话快照。该文件包含本地聊天和文档正文，请勿提交或公开；现有 `.gitignore` 已忽略它。
+对话存储 v2 使用小型原子 manifest、内容寻址正文 blob，以及 append-only 消息和文档记录。系统保存附件解析后的正文与元数据，不额外复制原始 PDF 或 DOCX 二进制；重启后可以继续问答和写作。点击“新建对话”会切换到新的空 generation，旧的不可变对象不会被当作当前会话读取。首次发现有效的 `profiles/conversation_state_v1.json` 时会安全迁移并保留 `.migrated.bak` 恢复备份；已有 v2 数据时不会重复迁移。这些文件包含本地聊天和文档正文，请勿提交或公开；现有 `.gitignore` 已忽略它们。
 
 画像和记忆按 `profile_id` 隔离。旧版、缺少 `profile_id` 的画像不能直接用于写作，需要重新执行建模。
 
@@ -218,15 +220,17 @@ uv run python main.py write `
 
 上面的示例使用 PowerShell 续行语法；在其他 Shell 中可以把参数写在同一行。
 
-## 测试
+## 测试与质量检查
 
 ```powershell
-uv run pytest -q
+uv sync --dev
+uv run ruff check .
+uv run mypy
+uv run pytest -q -rs
+uv run pytest -q -rs --cov=src --cov-report=term-missing
 ```
 
-请使用 `uv run`，避免误用缺少项目依赖的系统 Python。真实网络和外部模型测试默认不会作为普通单元测试执行。
-
-仓库中的 [`ci/pytest.yml`](ci/pytest.yml) 是 GitHub Actions 工作流模板。若要启用远程 CI，需要将它放到 `.github/workflows/pytest.yml`。
+请使用 `uv run`，避免误用缺少项目依赖的系统 Python。真实网络和外部模型测试默认不会作为普通单元测试执行。GitHub Actions 工作流位于 [`.github/workflows/pytest.yml`](.github/workflows/pytest.yml)，会在 Python 3.10 和 3.12 上使用锁文件运行离线测试，并执行有界 Ruff、mypy 与覆盖率检查。
 
 ## 实验与评测
 
@@ -257,7 +261,7 @@ uv run python main.py benchmark --ab
 
 ### Embedding 请求失败
 
-确认 `embedding.api_key`、`embedding.base_url` 和 `embedding.model` 属于同一个服务商。普通检索允许降级到 BM25；严格消融实验会直接失败，以保证实验条件没有被悄悄改变。
+先确认 `embedding.mode`：`sparse` 只运行 BM25L 且不会发出 Embedding 请求；`dense` 要求 `embedding.api_key`、`embedding.base_url` 和 `embedding.model` 都已配置且属于同一个服务商。普通混合检索在 dense 服务运行时故障时可继续使用稀疏通道；要求 dense 的严格消融实验会直接失败，以保证实验条件没有被悄悄改变。
 
 ### 依赖已安装但命令仍然报缺包
 
@@ -275,11 +279,18 @@ EchoStyle/
 │   ├── extractors/   # PDF、DOCX、文本和微信文章解析
 │   ├── generator/    # 写作提示与合成逻辑
 │   ├── memory/       # 画像存储、向量库与 RRF 检索
-│   └── web/          # Streamlit 工作台与样式资源
+│   └── web/          # 模块化 Streamlit 页面、会话、摄取、消息与样式资源
+├── .github/workflows/ # 已启用的 GitHub Actions CI
 ├── experiments/      # 消融、规模、盲评、A/B 与失败分析
 ├── tests/            # 单元和集成测试
-├── ci/               # CI 工作流模板
 ├── main.py           # CLI 入口
 ├── config.example.yaml
+├── LICENSE           # MIT License
 └── pyproject.toml
 ```
+
+运行时版本由 [`src/version.py`](src/version.py) 唯一维护，包元数据、CLI 与基准报告均从该文件读取。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。

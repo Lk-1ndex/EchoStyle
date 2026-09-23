@@ -13,6 +13,12 @@ from src.agents.state import AgentState
 from src.core.config import AppConfig
 from src.core.exceptions import IncompleteGenerationError
 from src.extractors.inspector import DocumentInspector
+from src.extractors.results import (
+    ExtractionBatchResult,
+    ExtractionFailure,
+    ExtractionStatus,
+    SourceExtractionResult,
+)
 from src.extractors.wechat import WeChatExtractor
 from src.extractors.word import WordExtractor
 from src.memory.conversation_store import ConversationStore
@@ -126,13 +132,23 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
         assert len(sources) == 1
         assert Path(sources[0]).read_bytes() == payload
         if fails:
-            raise RuntimeError("offline extraction failed")
-        return [{"title": Path(sources[0]).stem, "content": "Sample article body", "engine_used": "plain_text", "char_count": 19}]
+            return ExtractionBatchResult(outcomes=[SourceExtractionResult(
+                source_index=0,
+                source=sources[0],
+                status=ExtractionStatus.FAILED,
+                error=ExtractionFailure(error_type="RuntimeError", message="offline extraction failed"),
+            )])
+        return ExtractionBatchResult(outcomes=[SourceExtractionResult(
+            source_index=0,
+            source=sources[0],
+            status=ExtractionStatus.SUCCEEDED,
+            article={"title": Path(sources[0]).stem, "content": "Sample article body", "engine_used": "plain_text", "char_count": 19},
+        )])
 
     chat_submission = SimpleNamespace(text="", files=[uploaded])
     with patch("src.core.config.load_config", return_value=config), patch.object(
         st, "chat_input", return_value=chat_submission
-    ), patch.object(CoordinatorAgent, "extract_sources", side_effect=extract) as extractor:
+    ), patch.object(CoordinatorAgent, "extract_sources_detailed", side_effect=extract) as extractor:
         app = AppTest.from_file(app_path, default_timeout=10).run()
         assert not app.exception
 
@@ -146,6 +162,41 @@ def test_web_upload_removes_temporary_file(tmp_path, monkeypatch, fails):
         assert persisted is not None
         assert persisted["documents"][0]["content"] == "Sample article body"
         assert persisted["messages"][0]["attachments"] == ["sample.md"]
+
+
+def test_wechat_partial_failure_keeps_source_hash_alignment():
+    from src.web.ingestion import commit_successful_outcomes, extract_wechat_urls
+
+    first = "https://mp.weixin.qq.com/s/first"
+    second = "https://mp.weixin.qq.com/s/second"
+    coordinator = SimpleNamespace()
+    coordinator.extract_sources_detailed = lambda sources, state: ExtractionBatchResult(outcomes=[
+        SourceExtractionResult(
+            source_index=0,
+            source=first,
+            status=ExtractionStatus.FAILED,
+            error=ExtractionFailure(error_type="RuntimeError", message="blocked"),
+        ),
+        SourceExtractionResult(
+            source_index=1,
+            source=second,
+            status=ExtractionStatus.SUCCEEDED,
+            article={"title": "second", "content": "successful article"},
+        ),
+    ])
+    documents = []
+    hashes = set()
+
+    batch, _ = extract_wechat_urls(f"{first} {second}", coordinator, hashes)
+    committed = commit_successful_outcomes(documents, hashes, batch)
+
+    import hashlib
+
+    expected = hashlib.sha256(second.encode("utf-8")).hexdigest()
+    assert batch.failures[0].source == first
+    assert committed[0]["document_id"] == expected
+    assert hashes == {expected}
+    assert documents == committed
 
 
 def test_web_preserves_incomplete_draft_without_a_quality_report(tmp_path, monkeypatch):

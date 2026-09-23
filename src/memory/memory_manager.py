@@ -25,6 +25,36 @@ class MemoryManager:
         chunks = self._chunk_article(title, content, profile_id=profile_id)
         return self.vector_store.add_chunks(chunks)
 
+    def prepare_articles(
+        self,
+        articles: List[Dict[str, Any]],
+        profile_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build all deterministic chunks before any persistent mutation."""
+        chunks: List[Dict[str, Any]] = []
+        for article in articles:
+            chunks.extend(
+                self._chunk_article(
+                    str(article["title"]),
+                    str(article["content"]),
+                    profile_id=profile_id,
+                )
+            )
+        return chunks
+
+    def ingest_articles(
+        self,
+        articles: List[Dict[str, Any]],
+        profile_id: Optional[str] = None,
+    ) -> List[str]:
+        """Persist an article batch in one vector-store commit."""
+        return self.vector_store.add_chunks_with_ids(
+            self.prepare_articles(articles, profile_id=profile_id)
+        )
+
+    def remove_chunks(self, profile_id: Optional[str], chunk_ids: List[str]) -> int:
+        return self.vector_store.remove_chunks(profile_id, chunk_ids)
+
     def retrieve_style_aware(
         self,
         query: str,
@@ -157,17 +187,7 @@ class MemoryManager:
             else:
                 position = "body"
 
-            # 篇章结构功能语义显式判定 (Discourse Function Classification)
-            if idx == 0 or (position == "opening" and ("？" in p or "！" in p or "说白了" in p or "别闹" in p)):
-                func = "hook"
-            elif idx == total_paras - 1 or (position == "ending" and ("守住" in p or "这是" in p or "唯一" in p or "总结" in p)):
-                func = "conclusion"
-            elif len(p) <= 120 and ("比如" in p or "例如" in p or "看到一篇" in p or "扒了一份" in p or "案例" in p):
-                func = "example"
-            elif len(p) <= 100 and ("说白了" in p or "本质上" in p or "必须" in p or "从来不是" in p or "绝不" in p or "！" in p):
-                func = "quote"
-            else:
-                func = "argument"
+            func = self._classify_function(p, idx, total_paras, position)
 
             emotion = "客观分析"
             if "？" in p or "难道" in p:
@@ -199,3 +219,43 @@ class MemoryManager:
             })
 
         return chunks
+
+    @staticmethod
+    def _classify_function(
+        paragraph: str,
+        index: int,
+        total_paragraphs: int,
+        position: str,
+    ) -> str:
+        """Classify discourse function with deterministic scores and tie-breaks."""
+        scores = {
+            "hook": 0,
+            "example": 0,
+            "quote": 0,
+            "argument": 1,
+            "conclusion": 0,
+        }
+        if index == 0:
+            scores["hook"] += 5
+        if index == total_paragraphs - 1:
+            scores["conclusion"] += 5
+        if position == "opening":
+            scores["hook"] += 2
+        if position == "ending":
+            scores["conclusion"] += 2
+
+        signals = {
+            "hook": ("？", "?", "你有没有", "想象一下", "先问", "问题是"),
+            "example": ("比如", "例如", "举个例子", "案例", "以此为例", "看到一篇", "扒了一份"),
+            "quote": ("说白了", "本质上", "必须", "从来不是", "绝不", "别闹", "！"),
+            "conclusion": ("总之", "归根结底", "最后", "因此", "所以说", "总结", "守住", "唯一"),
+        }
+        for function, markers in signals.items():
+            scores[function] += 3 * sum(marker in paragraph for marker in markers)
+        if len(paragraph) <= 100 and scores["quote"] > 0:
+            scores["quote"] += 1
+        if len(paragraph) <= 140 and scores["example"] > 0:
+            scores["example"] += 1
+
+        priority = ("hook", "conclusion", "example", "quote", "argument")
+        return max(priority, key=lambda function: (scores[function], -priority.index(function)))

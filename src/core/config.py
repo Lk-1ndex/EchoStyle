@@ -2,7 +2,7 @@ import os
 import yaml
 from pathlib import Path
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class LLMConfig(BaseModel):
@@ -22,13 +22,34 @@ class LLMConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    api_key: str = Field(default="", description="向量 Embedding API Key (留空则复用 LLM)")
-    base_url: str = Field(default="", description="Embedding 基础路径 (留空则复用 LLM)")
-    model: str = Field(default="text-embedding-3-small", description="向量模型名称")
+    mode: Literal["sparse", "dense"] = Field(
+        default="sparse",
+        description="检索向量模式；sparse 不发起 Embedding 请求，dense 使用独立配置",
+    )
+    api_key: str = Field(default="", description="独立向量 Embedding API Key")
+    base_url: str = Field(default="", description="独立 Embedding API 基础路径")
+    model: str = Field(default="", description="向量模型名称")
     batch_size: int = Field(default=32, ge=1, le=256, description="单次 Embedding 请求的最大文本数")
     timeout: float = Field(default=60.0, gt=0, description="单批 Embedding 请求超时秒数")
     max_retries: int = Field(default=3, ge=0, le=10, description="Embedding 临时故障最大重试次数")
     retry_base_delay: float = Field(default=1.0, ge=0, description="Embedding 指数退避基础秒数")
+
+    @field_validator("api_key", "base_url", "model", mode="before")
+    @classmethod
+    def strip_strings(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_dense_configuration(self) -> "EmbeddingConfig":
+        if self.mode == "dense":
+            missing = [
+                name
+                for name in ("api_key", "base_url", "model")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(f"embedding.mode=dense 时必须配置: {', '.join(missing)}")
+        return self
 
 
 class ExtractorConfig(BaseModel):
@@ -120,6 +141,10 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         data["evaluator"]["model"] = os.getenv("EVALUATOR_MODEL")
 
     # 向量 Embedding 环境变量
+    if os.getenv("EMBEDDING_MODE"):
+        if "embedding" not in data:
+            data["embedding"] = {}
+        data["embedding"]["mode"] = os.getenv("EMBEDDING_MODE")
     if os.getenv("EMBEDDING_API_KEY"):
         if "embedding" not in data:
             data["embedding"] = {}

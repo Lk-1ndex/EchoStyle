@@ -58,17 +58,33 @@ class AnalystAgent(BaseAgent):
             quantitative=quantitative_metrics
         )
 
-        # 4. 摄入 Style Memory 长期向量库
+        # 4. 先构建全部切片并单次提交 Style Memory，再以画像保存作为可见提交标记。
         state.transition_to(AgentStatus.MODELING, "将样文段落进行多维切片并存入长期风格记忆库 (Style Memory)...")
-        total_chunks_added = 0
-        for a in sample_articles:
-            added = self.memory_manager.ingest_article(a["title"], a["content"], profile_id=deep_profile.profile_id)
-            total_chunks_added += added
+        committed_chunk_ids = self.memory_manager.ingest_articles(
+            sample_articles,
+            profile_id=deep_profile.profile_id,
+        )
+        total_chunks_added = len(committed_chunk_ids)
         if self.profile_store is not None:
             try:
                 self.profile_store.save(deep_profile)
-            except Exception:
-                self.memory_manager.clear_memory(profile_id=deep_profile.profile_id)
+            except Exception as save_error:
+                try:
+                    self.memory_manager.remove_chunks(
+                        deep_profile.profile_id,
+                        committed_chunk_ids,
+                    )
+                except Exception as rollback_error:
+                    rollback_note = f"风格记忆补偿回滚失败: {rollback_error}"
+                    add_note = getattr(save_error, "add_note", None)
+                    if add_note is not None:
+                        add_note(rollback_note)
+                    else:
+                        notes = getattr(save_error, "__notes__", None)
+                        if notes is None:
+                            notes = []
+                            setattr(save_error, "__notes__", notes)
+                        notes.append(rollback_note)
                 raise
         if self.memory_manager.vector_store.model_provider.has_embedding_credentials():
             result_message = f"成功向量化入库 {total_chunks_added} 个风格片段，并持久化文风档案！"

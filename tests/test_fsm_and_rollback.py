@@ -152,7 +152,7 @@ def test_coordinator_initial_draft_fsm_and_rollback_recovery():
     report_degraded = EvaluationReport(overall_score=55.0, detected_cliches=["老生常谈"], feedback="严重倒退")
 
     coordinator.critic_agent.judge.evaluate = MagicMock(side_effect=[report_v1, report_degraded])
-    coordinator.writer_agent.model_provider.chat_completion = MagicMock(return_value="改坏了的文本")
+    coordinator.writer_agent.model_provider.generate_long_form = MagicMock(return_value="改坏了的文本")
 
     draft2, rep2, final_st2 = coordinator.run(state=state2, profile=profile, initial_draft="优选初始草稿")
     assert draft2 == "优选初始草稿"
@@ -197,7 +197,9 @@ def test_coordinator_best_version_tracks_true_historical_maximum():
     report_v3 = EvaluationReport(overall_score=60.0, detected_cliches=["老生常谈"], feedback="质量严重暴跌")
 
     coordinator.critic_agent.judge.evaluate = MagicMock(side_effect=[report_v1, report_v2, report_v3])
-    coordinator.writer_agent.model_provider.chat_completion = MagicMock(side_effect=["版本v2草稿(82分)", "版本v3草稿(60分)"])
+    coordinator.writer_agent.model_provider.generate_long_form = MagicMock(
+        side_effect=["版本v2草稿(82分)", "版本v3草稿(60分)"]
+    )
 
     state = AgentState(topic="历史最高分回滚验证")
     draft, rep, final_st = coordinator.run(state=state, profile=profile, initial_draft="版本v1草稿(90分)")
@@ -241,7 +243,7 @@ def test_coordinator_retries_exhausted_recovers_highest_historical_score():
     report_v2 = EvaluationReport(overall_score=72.0, detected_cliches=[], feedback="仍有改进空间")
 
     coordinator.critic_agent.judge.evaluate = MagicMock(side_effect=[report_v1, report_v2])
-    coordinator.writer_agent.model_provider.chat_completion = MagicMock(return_value="劣化版v2草稿(72分)")
+    coordinator.writer_agent.model_provider.generate_long_form = MagicMock(return_value="劣化版v2草稿(72分)")
 
     state = AgentState(topic="重试耗尽回滚最高分验证")
     draft, rep, final_st = coordinator.run(state=state, profile=profile, initial_draft="高质量v1草稿(78分)")

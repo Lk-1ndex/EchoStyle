@@ -16,12 +16,18 @@ __pycache__/
 # 测试与代码分析缓存
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
+.mypy_cache/
+.ruff_cache/
 
 # 临时生成文件与本地数据
 profiles/*.json
 profiles/*.lock
 profiles/*.md
+profiles/conversation_state_v2/
+profiles/*.migrated.bak
+profiles/*.json.*.migrated.bak
 profiles/benchmark_samples/
 *.log
 *.tmp

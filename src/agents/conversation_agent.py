@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from src.core.config import AppConfig
 from src.core.model_provider import ModelProvider
 from src.core.models import DeepStyleProfile, EvaluationReport
+from src.core.text import count_visible_chars
 
 from .coordinator import CoordinatorAgent
 from .state import AgentState
@@ -124,7 +125,7 @@ JSON 字段：
         if plan.action == ConversationAction.DOCUMENT_QA:
             if not documents:
                 return ConversationResult(
-                    content="当前对话中还没有可读取的文件。请在输入框中附加 PDF、Word、Markdown 或文本文件后再提问。",
+                    content="当前对话中还没有可读取的文件。请在输入框中附加 PDF、DOCX、Markdown 或文本文件后再提问。",
                     action=plan.action,
                     logs=route_logs,
                 )
@@ -400,7 +401,7 @@ JSON 字段：
                 profile=profile,
                 topic=state.topic,
                 key_points=revision_instruction,
-                word_count=self._requested_word_count(message) or max(1, len("".join(draft.split()))),
+                word_count=self._requested_word_count(message) or max(1, count_visible_chars(draft)),
                 state=state,
                 initial_draft=draft,
                 revision_instruction=revision_instruction,

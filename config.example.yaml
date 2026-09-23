@@ -16,11 +16,13 @@ evaluator:
   temperature: 0.0
   max_tokens: 4096
 
-# 向量 Embedding 模型配置 (支持 OpenAI 兼容格式，用于 Dense 与 Hybrid RAG 检索)
+# 向量检索模式：默认 sparse，不会发起 Embedding 请求，也绝不复用 LLM 凭据。
+# 启用 Dense/Hybrid 时，将 mode 改为 dense，并同时填写同一服务商的 key、URL 和模型。
 embedding:
-  api_key: "your-siliconflow-api-key-here"
-  base_url: "https://api.siliconflow.cn/v1"
-  model: "Pro/BAAI/bge-m3"
+  mode: "sparse"                         # sparse / dense
+  api_key: ""
+  base_url: ""
+  model: ""
   batch_size: 32                         # 单次请求文本数；免费/共享接口建议控制批量
   timeout: 60                            # 单批请求超时秒数
   max_retries: 3                         # 429/5xx/网络异常重试次数

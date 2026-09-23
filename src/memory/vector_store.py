@@ -37,8 +37,12 @@ class VectorStore:
         self._load()
 
     def add_chunks(self, chunks: List[Dict[str, Any]]) -> int:
+        return len(self.add_chunks_with_ids(chunks))
+
+    def add_chunks_with_ids(self, chunks: List[Dict[str, Any]]) -> List[str]:
+        """Atomically add a batch and return only the IDs committed by this call."""
         if not chunks:
-            return 0
+            return []
 
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         with self._file_lock:
@@ -65,7 +69,7 @@ class VectorStore:
                 new_chunks.append(chunk)
 
             if not new_chunks:
-                return 0
+                return []
 
             embeddings = self.model_provider.get_embeddings([c["content"] for c in new_chunks])
             if embeddings is not None:
@@ -99,7 +103,7 @@ class VectorStore:
             except Exception:
                 self._load()
                 raise
-            return len(new_chunks)
+            return [str(chunk["id"]) for chunk in new_chunks]
 
     @staticmethod
     def _profile_id(chunk: Dict[str, Any]) -> Optional[str]:
@@ -217,7 +221,7 @@ class VectorStore:
         doc_lens = [sum(t.values()) for t in cand_tokens]
         N = len(candidates)
         avgdl = sum(doc_lens) / max(1, N)
-        has_query_bigrams = any(len(t) >= 2 for t in q_tokens)
+        has_query_phrases = any(self._is_chinese_ngram(token) for token in q_tokens)
 
         scores: List[Tuple[float, str]] = []
         k1 = 1.5
@@ -232,11 +236,11 @@ class VectorStore:
                 continue
 
             score = 0.0
-            matched_bigrams = 0
+            matched_phrases = 0
             for t, q_w in q_tokens.items():
                 if t in c_tok:
-                    if len(t) >= 2:
-                        matched_bigrams += 1
+                    if self._is_chinese_ngram(t):
+                        matched_phrases += 1
                     df = sum(1 for tok in cand_tokens if t in tok)
                     idf = math.log((N - df + 0.5) / (df + 0.5) + 1.0)
                     tf = c_tok[t]
@@ -246,7 +250,7 @@ class VectorStore:
                     score += q_w * idf * bm25_term
 
             # 伪正相关抑制门控：若查询包含二元词，但切片未命中任何二元词，仅靠孤立单字弱相关者拒绝准入
-            if has_query_bigrams and matched_bigrams == 0:
+            if has_query_phrases and matched_phrases == 0:
                 score = 0.0
 
             if score > 0:
@@ -353,6 +357,34 @@ class VectorStore:
             self.chunks = remaining
             self._save()
 
+    def remove_chunks(self, profile_id: Optional[str], chunk_ids: List[str]) -> int:
+        """Remove exactly the requested profile-scoped chunks in one atomic write."""
+        ids = {str(chunk_id) for chunk_id in chunk_ids}
+        if not ids:
+            return 0
+
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._file_lock:
+            self._refresh_from_disk(locked=True)
+            before = len(self.chunks)
+            remaining = [
+                chunk
+                for chunk in self.chunks
+                if not (
+                    self._profile_id(chunk) == profile_id
+                    and str(chunk.get("id")) in ids
+                )
+            ]
+            removed = before - len(remaining)
+            if removed:
+                self.chunks = remaining
+                try:
+                    self._save()
+                except Exception:
+                    self._load()
+                    raise
+            return removed
+
     def _load(self):
         if self.storage_path.exists():
             with open(self.storage_path, "r", encoding="utf-8") as f:
@@ -428,31 +460,32 @@ class VectorStore:
         "for", "with", "by", "as", "from", "it", "this", "that"
     }
 
+    @staticmethod
+    def _is_chinese_ngram(token: str) -> bool:
+        return len(token) >= 2 and bool(re.fullmatch(r"[一-鿿]+", token))
+
     @classmethod
     def _tokenize(cls, text: str) -> Dict[str, float]:
         text = text.lower().strip()
         tokens: Dict[str, float] = {}
-        # 英文与数字单词（过滤停用词与单字符）
-        for w in re.findall(r"[a-zA-Z0-9]+", text):
-            if w not in cls.ENGLISH_STOPWORDS and len(w) > 1:
-                tokens[w] = tokens.get(w, 0.0) + 1.0
-        # 中文短语提取（按标点符号断句，避免跨句生成无效 bigram）
-        cn_phrases = re.findall(r"[\u4e00-\u9fa5]+", text)
-        for phrase in cn_phrases:
-            if len(phrase) == 1:
-                if phrase[0] not in cls.CHINESE_STOPWORDS:
-                    tokens[phrase[0]] = tokens.get(phrase[0], 0.0) + 0.5
-            else:
-                # 1-gram 单字降权至 0.3，抑制高频单字伪正相关
-                for ch in phrase:
-                    if ch not in cls.CHINESE_STOPWORDS:
-                        tokens[ch] = tokens.get(ch, 0.0) + 0.3
-                # 2-gram 重叠二元字组赋权 2.0，优先保障词汇搭配与实体语义
-                for i in range(len(phrase) - 1):
-                    bg = phrase[i : i + 2]
-                    if bg[0] in cls.CHINESE_STOPWORDS and bg[1] in cls.CHINESE_STOPWORDS:
+        for word in re.findall(r"[a-zA-Z0-9]+", text):
+            if word not in cls.ENGLISH_STOPWORDS and len(word) > 1:
+                tokens[word] = tokens.get(word, 0.0) + 1.0
+
+        # Runs stop at punctuation and Latin boundaries so n-grams do not bridge
+        # unrelated clauses. Longer Chinese phrases carry stronger evidence.
+        for phrase in re.findall(r"[一-鿿]+", text):
+            for char in phrase:
+                if char not in cls.CHINESE_STOPWORDS:
+                    tokens[char] = tokens.get(char, 0.0) + 0.25
+            for width, weight in ((2, 2.0), (3, 2.6)):
+                for index in range(len(phrase) - width + 1):
+                    ngram = phrase[index : index + width]
+                    if all(char in cls.CHINESE_STOPWORDS for char in ngram):
                         continue
-                    tokens[bg] = tokens.get(bg, 0.0) + 2.0
+                    tokens[ngram] = tokens.get(ngram, 0.0) + weight
+            if 2 <= len(phrase) <= 8 and phrase not in cls.CHINESE_STOPWORDS:
+                tokens[phrase] = tokens.get(phrase, 0.0) + 3.0
         return tokens
 
     @staticmethod

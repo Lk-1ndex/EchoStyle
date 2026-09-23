@@ -446,6 +446,25 @@ def test_bm25_corpus_idf_suppresses_pseudo_relevance():
         assert "doc_writing_style" not in result_ids
 
 
+def test_chinese_trigram_and_short_phrase_tokens_are_weighted():
+    tokens = VectorStore._tokenize("非厄米谱结构")
+
+    assert tokens["非厄米"] > tokens["非厄"] > tokens["非"]
+    assert tokens["非厄米谱结构"] > 0
+    assert not VectorStore._is_chinese_ngram("architecture")
+    assert VectorStore._is_chinese_ngram("谱结构")
+
+
+def test_discourse_classifier_uses_deterministic_scoring():
+    from src.memory.memory_manager import MemoryManager
+
+    assert MemoryManager._classify_function("你有没有想过，问题究竟在哪里？", 0, 5, "opening") == "hook"
+    assert MemoryManager._classify_function("比如，这个案例展示了具体路径。", 2, 5, "body") == "example"
+    assert MemoryManager._classify_function("说白了，判断从来不是信息搬运！", 2, 5, "body") == "quote"
+    assert MemoryManager._classify_function("中间部分展开机制与边界条件。", 2, 5, "body") == "argument"
+    assert MemoryManager._classify_function("归根结底，这是我们唯一能守住的原则。", 4, 5, "ending") == "conclusion"
+
+
 def test_add_chunks_with_none_id_generates_stable_id():
     """验证 P1 缺陷修复：当切片显式传入 id 为 None 时，正确自动分配确定性稳定哈希 ID，杜绝 id 塌缩为 'None' 导致切片覆盖或破平失效"""
     with tempfile.TemporaryDirectory() as tmp_dir:

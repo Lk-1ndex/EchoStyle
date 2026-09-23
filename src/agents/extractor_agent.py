@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Dict
 from .base import BaseAgent
 from .state import AgentState, AgentStatus
+from src.extractors.capabilities import validate_source
 from src.extractors.inspector import DocumentInspector
 from src.extractors.wechat import WeChatExtractor
 from src.extractors.word import WordExtractor
@@ -40,6 +41,8 @@ class ExtractorAgent(BaseAgent):
         source = source.strip()
         state.transition_to(AgentStatus.PARSING, f"开始处理样文输入源: {source}")
 
+        validate_source(source)
+
         # 1. 微信公众号 URL
         if source.startswith("http://") or source.startswith("https://"):
             state.transition_to(AgentStatus.PARSING, "探测为微信公众号网络链接，调用 Jina 高保真转译引擎...")
@@ -59,7 +62,7 @@ class ExtractorAgent(BaseAgent):
         ext = p.suffix.lower()
 
         # 2. Word 文档
-        if ext in [".docx", ".doc"]:
+        if ext == ".docx":
             state.transition_to(AgentStatus.PARSING, "探测为 Word 文档，使用 MarkItDown 进行语义结构解析...")
             clean_md = self.word_extractor.extract(str(p))
             return {
