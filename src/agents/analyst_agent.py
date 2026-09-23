@@ -75,7 +75,16 @@ class AnalystAgent(BaseAgent):
                         committed_chunk_ids,
                     )
                 except Exception as rollback_error:
-                    save_error.add_note(f"风格记忆补偿回滚失败: {rollback_error}")
+                    rollback_note = f"风格记忆补偿回滚失败: {rollback_error}"
+                    add_note = getattr(save_error, "add_note", None)
+                    if add_note is not None:
+                        add_note(rollback_note)
+                    else:
+                        notes = getattr(save_error, "__notes__", None)
+                        if notes is None:
+                            notes = []
+                            setattr(save_error, "__notes__", notes)
+                        notes.append(rollback_note)
                 raise
         if self.memory_manager.vector_store.model_provider.has_embedding_credentials():
             result_message = f"成功向量化入库 {total_chunks_added} 个风格片段，并持久化文风档案！"
