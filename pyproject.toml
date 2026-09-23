@@ -1,8 +1,9 @@
 [project]
 name = "echostyle"
-version = "0.1.0"
+dynamic = ["version"]
 description = "AI 个人写作风格克隆与仿写系统"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "markitdown[docx,pdf]>=0.1.7",
@@ -18,14 +19,53 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0.0"]
+dev = [
+    "mypy>=1.18.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.13.0",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/version.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["artifacts", "profiles"]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.10"
+explicit_package_bases = true
+follow_imports = "skip"
+ignore_missing_imports = true
+check_untyped_defs = true
+files = [
+    "src/core/text.py",
+    "src/extractors/capabilities.py",
+    "src/extractors/results.py",
+    "src/memory/conversation_store.py",
+    "src/web/ingestion.py",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/web/app.py"]
+
+[tool.coverage.report]
+fail_under = 55
+skip_covered = true
+show_missing = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

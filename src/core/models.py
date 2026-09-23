@@ -138,7 +138,7 @@ class StyleProfile(BaseModel):
 
 class DeepStyleProfile(BaseModel):
     """
-    EchoStyle 2.5 深度文风建模档案：
+    EchoStyle 深度文风建模档案：
     深度融合【统计语言学客观指标 (Stylometrics)】与【LLM 质性解构指纹】。
     """
     name: str = Field("深度文风档案", description="文风名称")

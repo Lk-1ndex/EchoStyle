@@ -10,6 +10,7 @@ from src.core.model_provider import ModelProvider
 
 def _provider(**embedding_overrides) -> ModelProvider:
     config = EmbeddingConfig(
+        mode="dense",
         api_key="test-key",
         base_url="https://embedding.example/v1",
         model="test-embedding",
@@ -96,13 +97,27 @@ def test_embedding_malformed_response_fails_closed():
             provider.get_embeddings(["测试文本"])
 
 
-def test_missing_embedding_credentials_keeps_explicit_sparse_only_mode():
+def test_explicit_sparse_mode_never_reuses_llm_credentials():
     provider = ModelProvider(
-        LLMConfig(api_key=""),
-        EmbeddingConfig(api_key="", base_url="", model="test-embedding"),
+        LLMConfig(api_key="llm-secret", base_url="https://api.deepseek.com"),
+        EmbeddingConfig(mode="sparse"),
     )
 
     with patch("src.core.model_provider.httpx.Client") as client_cls:
         assert provider.get_embeddings(["测试文本"]) is None
         client_cls.assert_not_called()
     assert not provider.has_embedding_credentials()
+
+
+@pytest.mark.parametrize("missing", ["api_key", "base_url", "model"])
+def test_dense_mode_requires_complete_independent_configuration(missing):
+    values = {
+        "mode": "dense",
+        "api_key": "embedding-key",
+        "base_url": "https://embedding.example/v1",
+        "model": "embedding-model",
+    }
+    values[missing] = "  "
+
+    with pytest.raises(ValueError, match=missing):
+        EmbeddingConfig(**values)

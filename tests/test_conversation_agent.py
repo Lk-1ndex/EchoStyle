@@ -238,6 +238,37 @@ def test_long_form_continues_after_an_early_natural_stop():
     assert "甲" * 4000 in chat.call_args_list[1].kwargs["user_prompt"]
 
 
+@pytest.mark.parametrize("target_chars", [500, 1000, 1500])
+def test_long_form_enforces_short_targets_after_natural_stop(target_chars):
+    provider = ModelProvider(AppConfig().llm)
+    chunks = ["甲" * 100, "乙" * (target_chars - 100)]
+
+    def complete(**kwargs):
+        provider.last_finish_reason = "stop"
+        return chunks.pop(0)
+
+    with patch.object(provider, "chat_completion", side_effect=complete) as chat:
+        article = provider.generate_long_form("system", "user", target_chars=target_chars)
+
+    assert len("".join(article.split())) >= int(target_chars * 0.95)
+    assert chat.call_count == 2
+
+
+def test_long_form_requires_natural_finish_after_length_cutoff():
+    provider = ModelProvider(AppConfig().llm)
+    chunks = ["甲" * 500, "完整结尾。"]
+
+    def complete(**kwargs):
+        provider.last_finish_reason = "length" if len(chunks) == 2 else "stop"
+        return chunks.pop(0)
+
+    with patch.object(provider, "chat_completion", side_effect=complete) as chat:
+        article = provider.generate_long_form("system", "user", target_chars=500)
+
+    assert article.endswith("完整结尾。")
+    assert chat.call_count == 2
+
+
 def test_long_form_removes_a_repeated_full_draft_prefix():
     provider = ModelProvider(AppConfig().llm)
     first_part = "甲" * 4000

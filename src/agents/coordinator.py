@@ -1,8 +1,15 @@
 from typing import Any, Dict, List, Optional, Tuple
 from src.core.config import AppConfig
 from src.core.models import DeepStyleProfile, EvaluationReport
+from src.core.text import count_visible_chars
 from src.memory.memory_manager import MemoryManager
 from src.memory.profile_store import ProfileStore
+from src.extractors.results import (
+    ExtractionBatchResult,
+    ExtractionFailure,
+    ExtractionStatus,
+    SourceExtractionResult,
+)
 from .base import BaseAgent
 from .state import AgentState, AgentStatus
 from .tools import Tool, ToolRegistry, CritiqueAction
@@ -101,7 +108,7 @@ class CoordinatorAgent(BaseAgent):
         if word_count is not None:
             state.word_count = word_count
         elif initial_draft is not None and revision_instruction:
-            state.word_count = max(1, len("".join(initial_draft.split())))
+            state.word_count = max(1, count_visible_chars(initial_draft))
         if target_audience is not None:
             state.target_audience = target_audience
         state.max_retries = self.config.agent.max_reflections
@@ -243,20 +250,56 @@ class CoordinatorAgent(BaseAgent):
             revision_instruction=revision_instruction,
         )
 
-    def extract_sources(self, sources: List[str], state: Optional[AgentState] = None) -> List[Dict[str, Any]]:
+    def extract_sources_detailed(
+        self,
+        sources: List[str],
+        state: Optional[AgentState] = None,
+    ) -> ExtractionBatchResult:
+        """Extract every source while preserving source/result alignment and errors."""
         st = state or AgentState()
-        articles = []
-        last_error = None
-        for src in sources:
+        outcomes: List[SourceExtractionResult] = []
+        for index, source in enumerate(sources):
+            log_start = len(st.execution_logs)
             try:
-                res = self.tool_registry.get("extract_document_tool").execute(st, source=src, force_engine=self.config.extractor.pdf_engine)
-                articles.append(res)
-            except Exception as e:
-                st.record_error(f"提取源 [{src}] 异常: {str(e)}")
-                last_error = e
-        if not articles and last_error is not None:
-            raise last_error
-        return articles
+                article = self.tool_registry.get("extract_document_tool").execute(
+                    st,
+                    source=source,
+                    force_engine=self.config.extractor.pdf_engine,
+                )
+                outcomes.append(
+                    SourceExtractionResult(
+                        source_index=index,
+                        source=source,
+                        status=ExtractionStatus.SUCCEEDED,
+                        article=article,
+                        logs=st.execution_logs[log_start:],
+                    )
+                )
+            except Exception as error:
+                st.record_error(f"提取源 [{source}] 异常: {error}")
+                outcomes.append(
+                    SourceExtractionResult(
+                        source_index=index,
+                        source=source,
+                        status=ExtractionStatus.FAILED,
+                        error=ExtractionFailure(
+                            error_type=type(error).__name__,
+                            message=str(error),
+                        ),
+                        logs=st.execution_logs[log_start:],
+                        exception=error,
+                    )
+                )
+        return ExtractionBatchResult(outcomes=outcomes)
+
+    def extract_sources(self, sources: List[str], state: Optional[AgentState] = None) -> List[Dict[str, Any]]:
+        result = self.extract_sources_detailed(sources, state=state)
+        if not result.successes and result.failures:
+            original = result.failures[-1].exception
+            if original is not None:
+                raise original
+            raise RuntimeError(result.failures[-1].error.message)
+        return result.articles
 
     def build_style(self, sample_articles: List[Dict[str, Any]], profile_name: str = "深度文风档案", state: Optional[AgentState] = None) -> DeepStyleProfile:
         st = state or AgentState()

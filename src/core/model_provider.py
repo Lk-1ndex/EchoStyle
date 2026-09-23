@@ -5,6 +5,7 @@ import httpx
 import tiktoken
 from src.core.config import LLMConfig, EmbeddingConfig
 from src.core.exceptions import EmbeddingUnavailableError, IncompleteGenerationError, ModelProviderError
+from src.core.text import count_visible_chars
 
 
 class ModelProvider:
@@ -183,11 +184,14 @@ class ModelProvider:
                 draft = part
             self.last_generation_parts += 1
             previous_finish_reason = self.last_finish_reason
-            visible_chars = len("".join(draft.split()))
+            visible_chars = count_visible_chars(draft)
 
-            if previous_finish_reason != "length" and (
-                target_chars <= estimated_chars_per_part or visible_chars >= minimum_chars
-            ):
+            # Capacity estimates determine only how many bounded requests to allow;
+            # completion is proven by measured visible output length. A truncation
+            # finish reason always requires one more request so the draft can end
+            # naturally rather than at a provider cut-off.
+            truncated = previous_finish_reason in {"length", "max_tokens"}
+            if visible_chars >= minimum_chars and not truncated:
                 return draft
 
             remaining = max(0, target_chars - visible_chars)
@@ -383,25 +387,29 @@ class ModelProvider:
             return str(choice["message"].get("content") or "").strip()
 
     def has_embedding_credentials(self) -> bool:
-        """Whether an embedding request has usable credentials after fallback resolution."""
-        api_key = self.embedding_config.api_key or self.llm_config.api_key
-        return bool(api_key and api_key.strip())
+        """Whether explicit dense embedding mode has a complete configuration."""
+        config = self.embedding_config
+        return config.mode == "dense" and all(
+            value and value.strip()
+            for value in (config.api_key, config.base_url, config.model)
+        )
 
     def get_embeddings(self, texts: List[str], timeout: Optional[float] = None) -> Optional[List[List[float]]]:
         """Generate embeddings in bounded batches and fail loudly on provider errors.
 
-        ``None`` is reserved for the intentional sparse-only mode where no API key
-        is configured. Once credentials exist, request failures raise instead of
-        silently persisting chunks without vectors.
+        ``None`` is reserved for explicit sparse mode. Dense mode exclusively uses
+        the embedding provider configuration and never borrows LLM credentials or
+        endpoints.
         """
         if not texts:
             return []
-
-        api_key = self.embedding_config.api_key or self.llm_config.api_key
-        base_url = self.embedding_config.base_url or self.llm_config.base_url
-        if not api_key:
+        if self.embedding_config.mode == "sparse":
             return None
+        if not self.has_embedding_credentials():
+            raise EmbeddingUnavailableError("Dense Embedding 配置不完整，拒绝发起请求。")
 
+        api_key = self.embedding_config.api_key
+        base_url = self.embedding_config.base_url
         url = f"{base_url.rstrip('/')}/embeddings"
         headers = {
             "Authorization": f"Bearer {api_key}",

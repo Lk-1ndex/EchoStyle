@@ -19,12 +19,15 @@ from src.core.models import DeepStyleProfile, StyleProfile
 from src.agents.coordinator import CoordinatorAgent
 from src.agents.state import AgentState
 from src.memory.profile_store import ProfileStore
+from src.version import __version__
 
 console = Console()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="EchoStyle 2.5: 基于 LLM Agent 的个人文风建模与可控智能创作系统")
+    parser = argparse.ArgumentParser(
+        description=f"EchoStyle {__version__}: 基于 LLM Agent 的个人文风建模与可控智能创作系统"
+    )
     subparsers = parser.add_subparsers(dest="command", help="子命令")
 
     # 提取命令

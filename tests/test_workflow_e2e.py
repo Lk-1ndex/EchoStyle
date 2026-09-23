@@ -49,7 +49,7 @@ def test_coordinator_workflow_integration():
     mock_draft = "说白了，写作者的独特个人风格是机器无法取代的灵魂印记。不要成为算法的复读机。"
     mock_critic_json = '{"style_fidelity": 88, "logic_depth": 85, "human_preference": 86, "radar": {"tone": 88, "cadence": 85, "lexicon": 88, "discourse": 85, "anti_ai": 100}, "critique_feedback": "行文干脆利落，无AI八股。"}'
 
-    with patch.object(coordinator.writer_agent.model_provider, "chat_completion", return_value=mock_draft), \
+    with patch.object(coordinator.writer_agent.model_provider, "generate_long_form", return_value=mock_draft), \
          patch.object(coordinator.critic_agent.judge.model_provider, "chat_completion", return_value=mock_critic_json):
 
         # 执行 run()
@@ -114,7 +114,7 @@ def test_condition_d_strict_single_variable_e2e():
     rewritten_draft = "说白了，真正的职场人靠交付结果说话，摒弃虚妄表演。"
 
     with patch.object(coordinator.critic_agent.judge.model_provider, "chat_completion", side_effect=[critic_report_1, critic_report_2]), \
-         patch.object(coordinator.writer_agent.model_provider, "chat_completion", return_value=rewritten_draft):
+         patch.object(coordinator.writer_agent.model_provider, "generate_long_form", return_value=rewritten_draft):
 
         art_d, report_d, final_st = coordinator.run(
             state=state_d,
@@ -295,7 +295,7 @@ def test_coordinator_network_integration_flow_with_mocked_network():
         "critique_feedback": "通过验收"
     }"""
 
-    with patch.object(coordinator.writer_agent.model_provider, "chat_completion", return_value=mock_article):
+    with patch.object(coordinator.writer_agent.model_provider, "generate_long_form", return_value=mock_article):
         with patch.object(coordinator.critic_agent.judge.model_provider, "chat_completion", return_value=mock_judge_json):
             draft, report, final_state = coordinator.run(state=state, profile=profile)
 
